@@ -174,6 +174,7 @@ export interface DmxDeviceStatus {
   lastError?: string;
   lastErrorAt?: string;
   lastFrameAt?: string;
+  packets?: number;
   productId?: string;
   vendorId?: string;
   writeMode?: string;

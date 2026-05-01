@@ -38,6 +38,7 @@ function errorMessage(error: unknown): string {
 export class MockDmxOutput implements DmxOutput {
   private lastFrame: number[] = [];
   private lastFrameAt?: string;
+  private packets = 0;
   private writes = 0;
 
   constructor(
@@ -50,6 +51,7 @@ export class MockDmxOutput implements DmxOutput {
 
   async sendFrame(frame: number[]): Promise<void> {
     this.lastFrame = frame.map(clampDmxByte);
+    this.packets += 1;
     this.writes += 1;
     this.lastFrameAt = new Date().toISOString();
   }
@@ -60,6 +62,7 @@ export class MockDmxOutput implements DmxOutput {
       detail: this.detail,
       driver: 'mock',
       lastFrameAt: this.lastFrameAt,
+      packets: this.packets,
       writes: this.writes,
     };
   }
@@ -73,6 +76,7 @@ export class UDmxOutput implements DmxOutput {
   private lastErrorAt?: string;
   private lastFrame?: number[];
   private lastFrameAt?: string;
+  private packets = 0;
   private writes = 0;
   private writeMode: 'multi' | 'single';
 
@@ -144,6 +148,7 @@ export class UDmxOutput implements DmxOutput {
       lastError: this.lastError,
       lastErrorAt: this.lastErrorAt,
       lastFrameAt: this.lastFrameAt,
+      packets: this.packets,
       productId: toHexId(this.config.udmxProductId),
       vendorId: toHexId(this.config.udmxVendorId),
       writeMode: this.writeMode,
@@ -179,6 +184,7 @@ export class UDmxOutput implements DmxOutput {
           reject(error);
           return;
         }
+        this.packets += 1;
         resolve();
       });
     });

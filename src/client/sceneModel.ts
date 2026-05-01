@@ -25,6 +25,11 @@ export interface TrackScene {
   version: 1;
 }
 
+export interface EnergyFrame {
+  energy: number;
+  time: number;
+}
+
 export interface FolkloricSceneInput {
   duration: number;
   fixtureCount: number;
@@ -33,9 +38,11 @@ export interface FolkloricSceneInput {
   songName: string;
 }
 
-interface EnergyFrame {
-  energy: number;
-  time: number;
+export interface FolkloricSceneFramesInput {
+  duration: number;
+  fixtureCount: number;
+  frames: EnergyFrame[];
+  songName: string;
 }
 
 type FullFixturePatch = Required<FixtureState>;
@@ -171,9 +178,20 @@ export function createAutoCue(
 export function generateFolkloricSceneFromSamples(
   input: FolkloricSceneInput,
 ): TrackScene {
+  return generateFolkloricSceneFromEnergyFrames({
+    duration: input.duration,
+    fixtureCount: input.fixtureCount,
+    frames: analyzeEnergy(input.samples, input.sampleRate),
+    songName: input.songName,
+  });
+}
+
+export function generateFolkloricSceneFromEnergyFrames(
+  input: FolkloricSceneFramesInput,
+): TrackScene {
   const fixtureCount = clampSceneFixtureCount(input.fixtureCount);
   const duration = roundTime(input.duration);
-  const frames = analyzeEnergy(input.samples, input.sampleRate);
+  const frames = input.frames.length ? input.frames : [{ energy: 0, time: 0 }];
   const onsets = detectOnsets(frames);
   const beatInterval = estimateBeatInterval(onsets, duration);
   const phraseDuration = Math.min(10, Math.max(3.5, beatInterval * 8));

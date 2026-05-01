@@ -23,10 +23,18 @@ Set light A to `A001` and light B to `A009`. The uDMX protocol is zero-based, so
 
 - Upload a song in the browser; audio stays local and is played through an HTML audio element.
 - Choose `Lights in this scene` before generating or capturing cues; scenes can target the first 1 or 2 configured fixtures.
-- Use `Generate Folkloric Scene` to analyze rhythm/phrase intensity in the browser and create warm RGBW cues for the selected number of lights.
+- Use `Generate Folkloric Scene` to analyze rhythm/phrase intensity in the browser and create warm RGBW cues for the selected number of lights. The generate button shows staged processing progress.
+- If the browser cannot decode an uploaded audio file for analysis, the app falls back to duration-based timed cues so the scene can still be used. Re-exporting the track as a standard MP3/WAV may restore beat-aware analysis.
 - Use `Add Manual Cue` while the song is paused or playing to capture the selected Light A/B state at the current audio time.
+- Use `Clear Scene` to remove all cues while keeping the uploaded song, fixture count, and scene settings.
 - Exported scene JSON contains cue timing and DMX values, not the audio file. Re-upload the song and import the scene JSON to replay the same show.
 - The 3D theater preview is browser-only; it visualizes the current DMX fixture state and does not send hardware commands.
+
+## Control Lock
+
+- Click `Take Control` before sending DMX commands. Sliders, presets, blackout, reconnect, and scene playback remain disabled until this browser owns the hardware lock.
+- The app keeps control after pause, stop, scene end, and returning to the mode-selection screen.
+- Control is released only when the user clicks `Release` / `Release Control`, the browser disconnects, or the backend drops the client connection.
 
 ## Requirements
 
@@ -79,7 +87,27 @@ npm start          # serves dist/client from the API server
 
 `npm test` includes fast checks for the DMX model, scene import/generation helpers, controller debounce, serialized writes, write-failure recovery, and a fake-timer simulation of 5 hours of refresh ticks.
 
-Run `npm run test:soak` before unattended use to exercise the controller in mock mode for 5 real hours. Use `npm run test:soak -- --minutes=30` for a shorter local soak.
+Run `npm run test:soak` before unattended use to exercise the controller in mock mode for 5 real hours. Use `npm run test:soak -- --minutes=30` for a shorter local soak. The soak workload sends changing RGBW frames every `250ms` by default, plus periodic blackout and reconnect checks.
+
+Soak stats print every `30s` by default:
+
+```text
+[soak:stats] elapsed=0m30s remaining=29m30s updates=120 packets=121 packets/s=4.03 updates/s=4.00 driver=mock connected=true failures=0
+```
+
+`updates` is controller update cycles. `packets` is actual output packets: mock and uDMX `multi` mode count one packet per frame, while uDMX `single` mode counts each successful USB control transfer. Use `--stats-interval-ms=5000` to print stats more often.
+
+To test the real USB-to-DMX path, run hardware mode explicitly:
+
+```bash
+npm run test:soak -- --driver=udmx --minutes=30
+```
+
+Hardware soak mode changes connected light colors and fails if uDMX disconnects or write failures increase. Use `--interval-ms=50` to approximate 20 Hz scene-playback writes, and add `--strobe` only if visible strobe flashes are acceptable:
+
+```bash
+npm run test:soak -- --driver=udmx --minutes=30 --interval-ms=50 --stats-interval-ms=5000
+```
 
 ## API
 

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
@@ -25,6 +25,8 @@ interface ViewerApi {
   controls: OrbitControls;
 }
 
+type ViewMode = 'front' | 'reset' | 'side' | 'top';
+
 const LIGHT_POSITIONS = [
   new THREE.Vector3(-2.45, 0.18, 2.35),
   new THREE.Vector3(2.45, 0.18, 2.35),
@@ -47,6 +49,7 @@ const OFF_FIXTURE: FixtureState = {
 };
 
 export function TheaterViewer({ fixtures }: TheaterViewerProps) {
+  const [activeView, setActiveView] = useState<ViewMode>('reset');
   const apiRef = useRef<ViewerApi>();
   const containerRef = useRef<HTMLDivElement>(null);
   const fixturesRef = useRef(fixtures);
@@ -101,17 +104,27 @@ export function TheaterViewer({ fixtures }: TheaterViewerProps) {
 
     const clock = new THREE.Clock();
     let animationFrame = 0;
+    let isInViewport = true;
+
+    const intersectionObserver = new IntersectionObserver(([entry]) => {
+      isInViewport = entry.isIntersecting;
+    });
+    intersectionObserver.observe(container);
+
     const animate = () => {
-      const elapsed = clock.getElapsedTime();
-      updateLightVisuals(visuals, fixturesRef.current, elapsed);
-      controls.update();
-      renderer.render(scene, camera);
+      if (isInViewport && document.visibilityState === 'visible') {
+        const elapsed = clock.getElapsedTime();
+        updateLightVisuals(visuals, fixturesRef.current, elapsed);
+        controls.update();
+        renderer.render(scene, camera);
+      }
       animationFrame = window.requestAnimationFrame(animate);
     };
     animate();
 
     return () => {
       window.cancelAnimationFrame(animationFrame);
+      intersectionObserver.disconnect();
       resizeObserver.disconnect();
       controls.dispose();
       renderer.dispose();
@@ -126,11 +139,13 @@ export function TheaterViewer({ fixtures }: TheaterViewerProps) {
     };
   }, []);
 
-  const setView = (view: 'front' | 'reset' | 'side' | 'top') => {
+  const setView = (view: ViewMode) => {
     const api = apiRef.current;
     if (!api) {
       return;
     }
+
+    setActiveView(view);
 
     const target = new THREE.Vector3(0, 0.9, -0.55);
     const positions = {
@@ -146,7 +161,7 @@ export function TheaterViewer({ fixtures }: TheaterViewerProps) {
   };
 
   return (
-    <div className="theaterViewer">
+    <div className="theaterViewer" aria-label="3D theater preview">
       <div className="theaterCanvas" ref={containerRef} />
       <div className="viewerHud">
         <div>
@@ -154,16 +169,36 @@ export function TheaterViewer({ fixtures }: TheaterViewerProps) {
           <span>Floor fixtures: front-left A001, front-right A009</span>
         </div>
         <div className="viewerButtons">
-          <button onClick={() => setView('reset')} type="button">
+          <button
+            aria-pressed={activeView === 'reset'}
+            className={activeView === 'reset' ? 'active' : undefined}
+            onClick={() => setView('reset')}
+            type="button"
+          >
             Orbit
           </button>
-          <button onClick={() => setView('front')} type="button">
+          <button
+            aria-pressed={activeView === 'front'}
+            className={activeView === 'front' ? 'active' : undefined}
+            onClick={() => setView('front')}
+            type="button"
+          >
             Front
           </button>
-          <button onClick={() => setView('top')} type="button">
+          <button
+            aria-pressed={activeView === 'top'}
+            className={activeView === 'top' ? 'active' : undefined}
+            onClick={() => setView('top')}
+            type="button"
+          >
             Top
           </button>
-          <button onClick={() => setView('side')} type="button">
+          <button
+            aria-pressed={activeView === 'side'}
+            className={activeView === 'side' ? 'active' : undefined}
+            onClick={() => setView('side')}
+            type="button"
+          >
             Side
           </button>
         </div>
