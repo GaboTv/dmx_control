@@ -6,16 +6,16 @@ Production-oriented local web app for controlling two 8-channel RGBW DMX fixture
 
 The included `control.jpeg` shows each fixture in `DMX 512 Control Mode: 8 Channel Model`:
 
-| Channel | Function | Range |
-| --- | --- | --- |
-| CH1 | Master dimmer | `0-255` |
-| CH2 | Red dimmer | `0-255` |
-| CH3 | Green dimmer | `0-255` |
-| CH4 | Blue dimmer | `0-255` |
-| CH5 | White dimmer | `0-255` |
-| CH6 | Strobe | `0-255`, slow to fast |
-| CH7 | Function choice | `0-50` direct DMX, `51-100` colors, `101-150` jump, `151-200` gradate, `201-250` pulse, `251-255` sound-active |
-| CH8 | Function speed | `0-255`, slow to fast |
+| Channel | Function        | Range                                                                                                          |
+| ------- | --------------- | -------------------------------------------------------------------------------------------------------------- |
+| CH1     | Master dimmer   | `0-255`                                                                                                        |
+| CH2     | Red dimmer      | `0-255`                                                                                                        |
+| CH3     | Green dimmer    | `0-255`                                                                                                        |
+| CH4     | Blue dimmer     | `0-255`                                                                                                        |
+| CH5     | White dimmer    | `0-255`                                                                                                        |
+| CH6     | Strobe          | `0-255`, slow to fast                                                                                          |
+| CH7     | Function choice | `0-50` direct DMX, `51-100` colors, `101-150` jump, `151-200` gradate, `201-250` pulse, `251-255` sound-active |
+| CH8     | Function speed  | `0-255`, slow to fast                                                                                          |
 
 Set light A to `A001` and light B to `A009`. The uDMX protocol is zero-based, so this app defaults `UDMX_START_ADDRESS=0` and sends a 16-channel frame.
 
@@ -23,7 +23,7 @@ Set light A to `A001` and light B to `A009`. The uDMX protocol is zero-based, so
 
 - Upload a song in the browser; audio stays local and is played through an HTML audio element.
 - Choose `Lights in this scene` before generating or capturing cues; scenes can target the first 1 or 2 configured fixtures.
-- Use `Auto-Generate Scene` to analyze audio energy in the browser and create a cue timeline for the selected number of lights.
+- Use `Generate Folkloric Scene` to analyze rhythm/phrase intensity in the browser and create warm RGBW cues for the selected number of lights.
 - Use `Add Manual Cue` while the song is paused or playing to capture the selected Light A/B state at the current audio time.
 - Exported scene JSON contains cue timing and DMX values, not the audio file. Re-upload the song and import the scene JSON to replay the same show.
 - The 3D theater preview is browser-only; it visualizes the current DMX fixture state and does not send hardware commands.
@@ -50,15 +50,17 @@ Open `http://localhost:5173`. The Vite dev server proxies `/api` and `/ws` to th
 
 Default uDMX USB IDs are `UDMX_VENDOR_ID=0x16c0` and `UDMX_PRODUCT_ID=0x05dc`.
 
-For Windows 11 + `libusbK`, use the safer defaults from `.env.example`:
+For the uDMX adapter, use the `.env.example` defaults:
 
 ```env
-UDMX_WRITE_MODE=single
+UDMX_WRITE_MODE=multi
 UDMX_REFRESH_MS=0
 DMX_WRITE_DEBOUNCE_MS=150
 ```
 
-`UDMX_WRITE_MODE=single` sends only changed channels with the uDMX single-channel command. `UDMX_WRITE_MODE=multi` sends the full show frame as one control transfer. `UDMX_WRITE_MODE=auto` tries multi and falls back to single after a transfer failure.
+`UDMX_WRITE_MODE=multi` sends the full 16-channel show frame as one control transfer. `UDMX_WRITE_MODE=single` sends changed channels one at a time. `UDMX_WRITE_MODE=auto` tries multi and falls back to single after a transfer failure.
+
+Music Sync prioritizes smooth automatic RGBW dimming: scene interpolation sends changed frames at up to about 20 updates/second while playback runs.
 
 ## Commands
 
@@ -68,9 +70,16 @@ npm run dev:api    # backend only
 npm run dev:web    # frontend only
 npm run typecheck
 npm test
+npm run test:soak # mock DMX long-run soak, defaults to 5 hours
 npm run build
 npm start          # serves dist/client from the API server
 ```
+
+## Reliability Tests
+
+`npm test` includes fast checks for the DMX model, scene import/generation helpers, controller debounce, serialized writes, write-failure recovery, and a fake-timer simulation of 5 hours of refresh ticks.
+
+Run `npm run test:soak` before unattended use to exercise the controller in mock mode for 5 real hours. Use `npm run test:soak -- --minutes=30` for a shorter local soak.
 
 ## API
 

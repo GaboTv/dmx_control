@@ -2,7 +2,13 @@
   color: #f7efe7;
   background: #0d0a13;
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -16,9 +22,22 @@ body {
   min-height: 100vh;
   margin: 0;
   background:
-    radial-gradient(circle at top left, rgba(255, 115, 0, 0.24), transparent 32rem),
-    radial-gradient(circle at top right, rgba(92, 61, 255, 0.3), transparent 34rem),
-    radial-gradient(circle at 50% 80%, rgba(0, 200, 255, 0.12), transparent 34rem), #0d0a13;
+    radial-gradient(
+      circle at top left,
+      rgba(255, 115, 0, 0.24),
+      transparent 32rem
+    ),
+    radial-gradient(
+      circle at top right,
+      rgba(92, 61, 255, 0.3),
+      transparent 34rem
+    ),
+    radial-gradient(
+      circle at 50% 80%,
+      rgba(0, 200, 255, 0.12),
+      transparent 34rem
+    ),
+    #0d0a13;
 }
 
 button,
@@ -50,7 +69,11 @@ button:disabled {
   padding: 32px;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 32px;
-  background: linear-gradient(145deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.04));
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.12),
+    rgba(255, 255, 255, 0.04)
+  );
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
 }
 
@@ -73,7 +96,7 @@ p {
 h1 {
   max-width: 760px;
   margin-bottom: 16px;
-  font-size: clamp(2.5rem, 7vw, 6.2rem);
+  font-size: clamp(1.6rem, 3.5vw, 3.1rem);
   line-height: 0.9;
   letter-spacing: -0.08em;
 }
@@ -94,6 +117,7 @@ h2 {
 .deviceCard,
 .panel,
 .errorBanner,
+.lockBanner,
 .modeBanner {
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(18, 13, 24, 0.78);
@@ -106,6 +130,11 @@ h2 {
   align-items: flex-start;
   padding: 18px;
   border-radius: 22px;
+}
+
+.deviceInfo {
+  display: grid;
+  gap: 8px;
 }
 
 .deviceCard p {
@@ -141,7 +170,13 @@ h2 {
   box-shadow: 0 0 20px rgba(117, 255, 155, 0.75);
 }
 
+.deviceReconnect {
+  width: 100%;
+  margin-top: 6px;
+}
+
 .errorBanner,
+.lockBanner,
 .modeBanner {
   margin-top: 18px;
   padding: 14px 18px;
@@ -156,6 +191,234 @@ h2 {
 .modeBanner {
   border-color: rgba(255, 190, 97, 0.45);
   color: #ffe1b8;
+}
+
+.lockBanner {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  justify-content: space-between;
+  color: #d8c9be;
+}
+
+.lockBanner strong,
+.lockBanner span {
+  display: block;
+}
+
+.lockBanner strong {
+  margin-bottom: 4px;
+  color: #fff;
+}
+
+.lockBanner.owned {
+  border-color: rgba(117, 255, 155, 0.42);
+}
+
+.lockBanner.blocked {
+  border-color: rgba(255, 77, 77, 0.45);
+}
+
+.homeChoice {
+  display: grid;
+  gap: 20px;
+  margin-top: 20px;
+}
+
+.homeIntro,
+.pageHeader {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 28px;
+  background: rgba(18, 13, 24, 0.78);
+  backdrop-filter: blur(18px);
+}
+
+.homeIntro {
+  padding: 28px;
+}
+
+.homeIntro p:last-child {
+  max-width: 780px;
+  margin-bottom: 0;
+  color: #d8c9be;
+}
+
+.homeCards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.homeCard {
+  display: grid;
+  min-height: 260px;
+  align-content: end;
+  gap: 12px;
+  padding: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 32px;
+  color: #fff;
+  background:
+    radial-gradient(
+      circle at top right,
+      rgba(255, 168, 97, 0.32),
+      transparent 18rem
+    ),
+    rgba(18, 13, 24, 0.82);
+  text-align: left;
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.32);
+}
+
+.homeCard:nth-child(2) {
+  background:
+    radial-gradient(
+      circle at top right,
+      rgba(116, 90, 255, 0.38),
+      transparent 18rem
+    ),
+    rgba(18, 13, 24, 0.82);
+}
+
+.homeCard span {
+  color: #ffa861;
+  font-size: 0.76rem;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.homeCard strong {
+  font-size: clamp(2rem, 4vw, 3.8rem);
+  line-height: 0.95;
+  letter-spacing: -0.06em;
+}
+
+.homeCard small {
+  max-width: 420px;
+  color: #d8c9be;
+  font-size: 1rem;
+}
+
+.pageHeader {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 18px;
+  align-items: center;
+  margin-top: 20px;
+  padding: 18px;
+}
+
+.pageHeader h2,
+.pageHeader p {
+  margin-bottom: 0;
+}
+
+.pageHeader small {
+  display: block;
+  margin-top: 6px;
+  color: #ffe1b8;
+}
+
+.scopePanel {
+  margin-top: 20px;
+}
+
+.lightScope,
+.sideTabs {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 22px;
+  background: rgba(18, 13, 24, 0.78);
+  backdrop-filter: blur(18px);
+}
+
+.lightScope {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 16px;
+}
+
+.lightScope label {
+  display: grid;
+  grid-template-columns: auto 160px minmax(0, 1fr);
+  gap: 12px;
+  align-items: center;
+}
+
+.lightScope span,
+.sceneSetup span {
+  color: #fff;
+  font-weight: 900;
+}
+
+.lightScope small,
+.sceneSetup small {
+  color: #9c8d86;
+}
+
+.lightScope select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 14px;
+  color: #fff;
+  background: #21182b;
+}
+
+.scopeBlackout {
+  white-space: nowrap;
+}
+
+.pageShell {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+  margin-top: 20px;
+}
+
+.pageContent > :first-child {
+  margin-top: 0;
+}
+
+.sideTabs {
+  position: sticky;
+  top: 18px;
+  display: grid;
+  gap: 8px;
+  padding: 6px;
+}
+
+.sideTabs button {
+  display: grid;
+  gap: 4px;
+  padding: 14px 18px;
+  border: 0;
+  border-radius: 16px;
+  color: #d8c9be;
+  background: transparent;
+  font-weight: 900;
+  text-align: left;
+}
+
+.sideTabs button.active {
+  color: #fff;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 168, 97, 0.32),
+    rgba(116, 90, 255, 0.28)
+  );
+}
+
+.sideTabs span {
+  color: #9c8d86;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.sideTabs button.active span {
+  color: #f1d7c3;
 }
 
 .showGrid,
@@ -265,7 +528,8 @@ h2 {
   gap: 8px;
 }
 
-.sceneSetup label span {
+.sceneSetup label span,
+.sceneSetup > div span {
   color: #fff;
   font-weight: 900;
 }
@@ -476,13 +740,17 @@ h2 {
 }
 
 .dangerZone {
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   margin-top: auto;
 }
 
 .blackoutButton {
   border-color: rgba(255, 77, 77, 0.45);
-  background: linear-gradient(135deg, rgba(255, 77, 77, 0.34), rgba(120, 0, 0, 0.4));
+  background: linear-gradient(
+    135deg,
+    rgba(255, 77, 77, 0.34),
+    rgba(120, 0, 0, 0.4)
+  );
 }
 
 .secondaryButton {
@@ -592,11 +860,19 @@ h2 {
 
 @media (max-width: 1060px) {
   .heroPanel,
+  .homeCards,
+  .scopePanel,
+  .pageShell,
   .showGrid,
   .viewerSection,
   .dashboardGrid,
   .fixtureGrid {
     grid-template-columns: 1fr;
+  }
+
+  .sideTabs {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
@@ -607,6 +883,7 @@ h2 {
   }
 
   .heroPanel,
+  .lockBanner,
   .panel {
     border-radius: 22px;
     padding: 18px;
@@ -616,6 +893,11 @@ h2 {
   .sceneActions,
   .sceneSetup,
   .sceneStats,
+  .lightScope,
+  .lockBanner,
+  .pageHeader,
+  .lightScope label,
+  .sideTabs,
   .fixtureHeader,
   .modeList.compact,
   .presetGrid,
@@ -645,6 +927,11 @@ h2 {
   }
 
   .viewerHud {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .lockBanner {
     align-items: flex-start;
     flex-direction: column;
   }

@@ -45,7 +45,7 @@ function envWriteMode(): UDmxWriteMode {
     return raw;
   }
 
-  return process.platform === 'win32' ? 'single' : 'multi';
+  return 'multi';
 }
 
 export const serverConfig = {
@@ -54,7 +54,8 @@ export const serverConfig = {
   dmxWriteDebounceMs: envInt('DMX_WRITE_DEBOUNCE_MS', 150),
   host: process.env.HOST ?? '127.0.0.1',
   port: envInt('PORT', 4174),
-  staticDir: process.env.STATIC_DIR ?? path.join(process.cwd(), 'dist', 'client'),
+  staticDir:
+    process.env.STATIC_DIR ?? path.join(process.cwd(), 'dist', 'client'),
   udmxProductId: envUsbId('UDMX_PRODUCT_ID', 0x05dc),
   udmxRefreshMs: envInt('UDMX_REFRESH_MS', 0),
   udmxStartAddress: envInt('UDMX_START_ADDRESS', 0),

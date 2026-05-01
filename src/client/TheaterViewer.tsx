@@ -2,7 +2,12 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-import { FIXTURE_CONFIGS, type FixtureState, clampDmxByte, isDirectControlMode } from '../shared/dmx';
+import {
+  FIXTURE_CONFIGS,
+  type FixtureState,
+  clampDmxByte,
+  isDirectControlMode,
+} from '../shared/dmx';
 
 interface TheaterViewerProps {
   fixtures: FixtureState[];
@@ -25,7 +30,10 @@ const LIGHT_POSITIONS = [
   new THREE.Vector3(2.45, 0.18, 2.35),
 ];
 
-const LIGHT_TARGETS = [new THREE.Vector3(-0.55, 0.95, -1.2), new THREE.Vector3(0.55, 0.95, -1.2)];
+const LIGHT_TARGETS = [
+  new THREE.Vector3(-0.55, 0.95, -1.2),
+  new THREE.Vector3(0.55, 0.95, -1.2),
+];
 
 const OFF_FIXTURE: FixtureState = {
   blue: 0,
@@ -75,7 +83,9 @@ export function TheaterViewer({ fixtures }: TheaterViewerProps) {
     apiRef.current = { camera, controls };
 
     buildTheater(scene);
-    const visuals = LIGHT_POSITIONS.map((position, index) => createLightVisual(scene, position, LIGHT_TARGETS[index]));
+    const visuals = LIGHT_POSITIONS.map((position, index) =>
+      createLightVisual(scene, position, LIGHT_TARGETS[index]),
+    );
 
     const resize = () => {
       const width = Math.max(1, container.clientWidth);
@@ -159,8 +169,12 @@ export function TheaterViewer({ fixtures }: TheaterViewerProps) {
         </div>
       </div>
       <div className="viewerLegend">
-        {FIXTURE_CONFIGS.map((fixture, index) => {
-          const visual = fixtureToVisual(fixtures[index] ?? OFF_FIXTURE, index, 0);
+        {FIXTURE_CONFIGS.slice(0, fixtures.length).map((fixture, index) => {
+          const visual = fixtureToVisual(
+            fixtures[index] ?? OFF_FIXTURE,
+            index,
+            0,
+          );
           return (
             <span key={fixture.id}>
               <i style={{ background: visual.cssColor }} />
@@ -183,7 +197,11 @@ function buildTheater(scene: THREE.Scene): void {
 
   const floor = new THREE.Mesh(
     new THREE.PlaneGeometry(9.4, 7.2),
-    new THREE.MeshStandardMaterial({ color: 0x17111e, roughness: 0.72, metalness: 0.04 }),
+    new THREE.MeshStandardMaterial({
+      color: 0x17111e,
+      roughness: 0.72,
+      metalness: 0.04,
+    }),
   );
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
@@ -191,7 +209,11 @@ function buildTheater(scene: THREE.Scene): void {
 
   const performanceArea = new THREE.Mesh(
     new THREE.PlaneGeometry(5.9, 4.25),
-    new THREE.MeshBasicMaterial({ color: 0x2b2136, opacity: 0.55, transparent: true }),
+    new THREE.MeshBasicMaterial({
+      color: 0x2b2136,
+      opacity: 0.55,
+      transparent: true,
+    }),
   );
   performanceArea.position.set(0, 0.012, -0.4);
   performanceArea.rotation.x = -Math.PI / 2;
@@ -205,9 +227,15 @@ function buildTheater(scene: THREE.Scene): void {
   backWall.receiveShadow = true;
   scene.add(backWall);
 
-  const curtainMaterial = new THREE.MeshStandardMaterial({ color: 0x3f0715, roughness: 0.82 });
+  const curtainMaterial = new THREE.MeshStandardMaterial({
+    color: 0x3f0715,
+    roughness: 0.82,
+  });
   for (const x of [-4.2, 4.2]) {
-    const curtain = new THREE.Mesh(new THREE.BoxGeometry(0.65, 4.25, 0.16), curtainMaterial.clone());
+    const curtain = new THREE.Mesh(
+      new THREE.BoxGeometry(0.65, 4.25, 0.16),
+      curtainMaterial.clone(),
+    );
     curtain.position.set(x, 2.12, -3.48);
     curtain.castShadow = true;
     scene.add(curtain);
@@ -220,13 +248,21 @@ function buildTheater(scene: THREE.Scene): void {
 
   const centerLine = new THREE.Mesh(
     new THREE.BoxGeometry(0.025, 0.025, 4.25),
-    new THREE.MeshBasicMaterial({ color: 0xffa861, opacity: 0.55, transparent: true }),
+    new THREE.MeshBasicMaterial({
+      color: 0xffa861,
+      opacity: 0.55,
+      transparent: true,
+    }),
   );
   centerLine.position.set(0, 0.035, -0.4);
   scene.add(centerLine);
 }
 
-function createLightVisual(scene: THREE.Scene, position: THREE.Vector3, target: THREE.Vector3): LightVisual {
+function createLightVisual(
+  scene: THREE.Scene,
+  position: THREE.Vector3,
+  target: THREE.Vector3,
+): LightVisual {
   const direction = target.clone().sub(position).normalize();
   const beamLength = position.distanceTo(target) + 1.3;
 
@@ -236,14 +272,22 @@ function createLightVisual(scene: THREE.Scene, position: THREE.Vector3, target: 
 
   const body = new THREE.Mesh(
     new THREE.BoxGeometry(0.48, 0.2, 0.36),
-    new THREE.MeshStandardMaterial({ color: 0x111016, roughness: 0.5, metalness: 0.35 }),
+    new THREE.MeshStandardMaterial({
+      color: 0x111016,
+      roughness: 0.5,
+      metalness: 0.35,
+    }),
   );
   body.castShadow = true;
   base.add(body);
 
   const lens = new THREE.Mesh(
     new THREE.SphereGeometry(0.13, 24, 12),
-    new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.35 }),
+    new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      emissive: 0xffffff,
+      emissiveIntensity: 0.35,
+    }),
   );
   lens.position.copy(direction.clone().multiplyScalar(0.24));
   base.add(lens);
@@ -284,7 +328,14 @@ function createLightVisual(scene: THREE.Scene, position: THREE.Vector3, target: 
   spotTarget.position.copy(target);
   scene.add(spotTarget);
 
-  const spot = new THREE.SpotLight(0xffffff, 0, beamLength + 2, Math.PI / 7, 0.65, 1.2);
+  const spot = new THREE.SpotLight(
+    0xffffff,
+    0,
+    beamLength + 2,
+    Math.PI / 7,
+    0.65,
+    1.2,
+  );
   spot.position.copy(position);
   spot.castShadow = true;
   spot.target = spotTarget;
@@ -293,7 +344,11 @@ function createLightVisual(scene: THREE.Scene, position: THREE.Vector3, target: 
   return { beam, glow, lens, spot };
 }
 
-function updateLightVisuals(visuals: LightVisual[], fixtures: FixtureState[], elapsed: number): void {
+function updateLightVisuals(
+  visuals: LightVisual[],
+  fixtures: FixtureState[],
+  elapsed: number,
+): void {
   visuals.forEach((visual, index) => {
     const fixture = fixtures[index] ?? OFF_FIXTURE;
     const { color, intensity } = fixtureToVisual(fixture, index, elapsed);
@@ -311,10 +366,15 @@ function updateLightVisuals(visuals: LightVisual[], fixtures: FixtureState[], el
   });
 }
 
-function fixtureToVisual(fixture: FixtureState, fixtureIndex: number, elapsed: number) {
+function fixtureToVisual(
+  fixture: FixtureState,
+  fixtureIndex: number,
+  elapsed: number,
+) {
   const master = clampDmxByte(fixture.master) / 255;
   const strobe = clampDmxByte(fixture.strobe) / 255;
-  const strobePulse = strobe > 0 ? (Math.sin(elapsed * (8 + strobe * 34)) > 0 ? 1 : 0.12) : 1;
+  const strobePulse =
+    strobe > 0 ? (Math.sin(elapsed * (8 + strobe * 34)) > 0 ? 1 : 0.12) : 1;
   const color = isDirectControlMode(fixture.functionMode)
     ? directFixtureColor(fixture)
     : macroFixtureColor(fixture, fixtureIndex, elapsed);
@@ -339,7 +399,11 @@ function directFixtureColor(fixture: FixtureState): THREE.Color {
   );
 }
 
-function macroFixtureColor(fixture: FixtureState, fixtureIndex: number, elapsed: number): THREE.Color {
+function macroFixtureColor(
+  fixture: FixtureState,
+  fixtureIndex: number,
+  elapsed: number,
+): THREE.Color {
   const speed = clampDmxByte(fixture.functionSpeed) / 255;
   const mode = clampDmxByte(fixture.functionMode);
   const baseHue = fixtureIndex * 0.22 + speed * 0.4;
@@ -363,11 +427,18 @@ function macroFixtureColor(fixture: FixtureState, fixtureIndex: number, elapsed:
     return new THREE.Color().setHSL(movingHue, 0.9, pulse);
   }
 
-  return new THREE.Color().setHSL((elapsed * 0.24 + fixtureIndex * 0.33) % 1, 0.95, 0.58);
+  return new THREE.Color().setHSL(
+    (elapsed * 0.24 + fixtureIndex * 0.33) % 1,
+    0.95,
+    0.58,
+  );
 }
 
 function colorBrightness(color: THREE.Color): number {
-  return Math.max(0.08, Math.min(1, color.r * 0.3 + color.g * 0.59 + color.b * 0.11));
+  return Math.max(
+    0.08,
+    Math.min(1, color.r * 0.3 + color.g * 0.59 + color.b * 0.11),
+  );
 }
 
 function disposeMaterial(material: THREE.Material | THREE.Material[]): void {

@@ -87,7 +87,10 @@ export class DmxController {
     };
   }
 
-  async update(input: unknown, options: { immediate?: boolean } = {}): Promise<DmxSnapshot> {
+  async update(
+    input: unknown,
+    options: { immediate?: boolean } = {},
+  ): Promise<DmxSnapshot> {
     const patch = normalizeShowPatch(input);
     this.applyPatch(patch);
 
@@ -123,8 +126,12 @@ export class DmxController {
         try {
           await this.output.sendFrame(frame);
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          console.error('[dmx] DMX frame write failed; backend remains online:', message);
+          const message =
+            error instanceof Error ? error.message : String(error);
+          console.error(
+            '[dmx] DMX frame write failed; backend remains online:',
+            message,
+          );
         }
       });
 

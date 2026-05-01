@@ -10,32 +10,41 @@ import {
   type DmxSnapshot,
   type FixtureState,
   type ShowState,
-  clampDmxByte,
   isDirectControlMode,
   modeForValue,
   showStateToDmxFrame,
 } from '../shared/dmx';
+import {
+  type FixturePatches,
+  type SceneCue,
+  type TrackScene,
+  clampSceneFixtureCount,
+  createEmptyScene,
+  createId,
+  findNextCueIndex,
+  fixtureToPatch,
+  formatTime,
+  generateFolkloricSceneFromSamples,
+  normalizeFixturePatches,
+  normalizeImportedScene,
+  normalizePatchLoose,
+  roundTime,
+  sceneDimmingPatchesAt,
+} from './sceneModel';
 import { TheaterViewer } from './TheaterViewer';
 
 type ConnectionState = 'connected' | 'connecting' | 'offline';
-type FixturePatches = DmxPatch[];
+type ActivePage = 'control' | 'home' | 'music';
 
-interface SceneCue {
-  fixtures: FixturePatches;
-  id: string;
-  label: string;
-  time: number;
-}
-
-interface TrackScene {
-  createdAt: string;
-  cues: SceneCue[];
-  duration: number;
-  fixtureCount: number;
-  name: string;
-  songName?: string;
-  version: 1;
-}
+const CLIENT_ID_STORAGE_KEY = 'dmx-control-client-id';
+const SCENE_DIMMING_INTERVAL_SECONDS = 0.05;
+const SCENE_DIMMING_KEYS: Array<keyof FixtureState> = [
+  'master',
+  'red',
+  'green',
+  'blue',
+  'white',
+];
 
 interface UploadedSong {
   duration?: number;
@@ -43,35 +52,97 @@ interface UploadedSong {
   url: string;
 }
 
-const CHANNEL_KEYS = DMX_CHANNELS.map((channel) => channel.key);
-
 const PRESETS: Array<{ fixtures: FixturePatches; label: string }> = [
   {
     label: 'Mirror Red/Blue',
     fixtures: [
-      { blue: 0, functionMode: 0, green: 0, master: 255, red: 255, strobe: 0, white: 0 },
-      { blue: 255, functionMode: 0, green: 20, master: 255, red: 0, strobe: 0, white: 0 },
+      {
+        blue: 0,
+        functionMode: 0,
+        green: 0,
+        master: 255,
+        red: 255,
+        strobe: 0,
+        white: 0,
+      },
+      {
+        blue: 255,
+        functionMode: 0,
+        green: 20,
+        master: 255,
+        red: 0,
+        strobe: 0,
+        white: 0,
+      },
     ],
   },
   {
     label: 'Warm Front',
     fixtures: [
-      { blue: 35, functionMode: 0, green: 130, master: 230, red: 255, strobe: 0, white: 180 },
-      { blue: 120, functionMode: 0, green: 40, master: 160, red: 40, strobe: 0, white: 0 },
+      {
+        blue: 35,
+        functionMode: 0,
+        green: 130,
+        master: 230,
+        red: 255,
+        strobe: 0,
+        white: 180,
+      },
+      {
+        blue: 120,
+        functionMode: 0,
+        green: 40,
+        master: 160,
+        red: 40,
+        strobe: 0,
+        white: 0,
+      },
     ],
   },
   {
     label: 'Cool Wash',
     fixtures: [
-      { blue: 255, functionMode: 0, green: 110, master: 230, red: 20, strobe: 0, white: 80 },
-      { blue: 180, functionMode: 0, green: 255, master: 210, red: 0, strobe: 0, white: 40 },
+      {
+        blue: 255,
+        functionMode: 0,
+        green: 110,
+        master: 230,
+        red: 20,
+        strobe: 0,
+        white: 80,
+      },
+      {
+        blue: 180,
+        functionMode: 0,
+        green: 255,
+        master: 210,
+        red: 0,
+        strobe: 0,
+        white: 40,
+      },
     ],
   },
   {
     label: 'White Hit',
     fixtures: [
-      { blue: 0, functionMode: 0, green: 0, master: 255, red: 0, strobe: 0, white: 255 },
-      { blue: 0, functionMode: 0, green: 0, master: 255, red: 0, strobe: 0, white: 255 },
+      {
+        blue: 0,
+        functionMode: 0,
+        green: 0,
+        master: 255,
+        red: 0,
+        strobe: 0,
+        white: 255,
+      },
+      {
+        blue: 0,
+        functionMode: 0,
+        green: 0,
+        master: 255,
+        red: 0,
+        strobe: 0,
+        white: 255,
+      },
     ],
   },
   {
@@ -84,29 +155,26 @@ const PRESETS: Array<{ fixtures: FixturePatches; label: string }> = [
   {
     label: 'Blackout',
     fixtures: [
-      { blue: 0, functionMode: 0, green: 0, master: 0, red: 0, strobe: 0, white: 0 },
-      { blue: 0, functionMode: 0, green: 0, master: 0, red: 0, strobe: 0, white: 0 },
+      {
+        blue: 0,
+        functionMode: 0,
+        green: 0,
+        master: 0,
+        red: 0,
+        strobe: 0,
+        white: 0,
+      },
+      {
+        blue: 0,
+        functionMode: 0,
+        green: 0,
+        master: 0,
+        red: 0,
+        strobe: 0,
+        white: 0,
+      },
     ],
   },
-];
-
-const AUTO_PALETTES: FixturePatches[] = [
-  [
-    { blue: 0, functionMode: 0, green: 20, master: 235, red: 255, strobe: 0, white: 0 },
-    { blue: 255, functionMode: 0, green: 35, master: 230, red: 0, strobe: 0, white: 0 },
-  ],
-  [
-    { blue: 40, functionMode: 0, green: 255, master: 230, red: 0, strobe: 0, white: 0 },
-    { blue: 0, functionMode: 0, green: 40, master: 225, red: 255, strobe: 0, white: 30 },
-  ],
-  [
-    { blue: 255, functionMode: 0, green: 0, master: 230, red: 170, strobe: 0, white: 0 },
-    { blue: 0, functionMode: 0, green: 210, master: 220, red: 30, strobe: 0, white: 120 },
-  ],
-  [
-    { blue: 0, functionMode: 0, green: 0, master: 255, red: 0, strobe: 0, white: 255 },
-    { blue: 130, functionMode: 0, green: 40, master: 220, red: 255, strobe: 0, white: 0 },
-  ],
 ];
 
 function createInitialShowState(): ShowState {
@@ -115,20 +183,28 @@ function createInitialShowState(): ShowState {
   };
 }
 
-function createEmptyScene(fixtureCount = FIXTURE_COUNT, songName?: string, duration = 0): TrackScene {
-  return {
-    createdAt: new Date().toISOString(),
-    cues: [],
-    duration,
-    fixtureCount: clampSceneFixtureCount(fixtureCount),
-    name: songName ? `${songName} show` : 'Untitled dance show',
-    songName,
-    version: 1,
-  };
+function createClientLabel(clientId: string): string {
+  return `Browser ${clientId.slice(-4).toUpperCase()}`;
+}
+
+function getOrCreateClientId(): string {
+  const existing = window.localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+  if (existing) {
+    return existing;
+  }
+
+  const nextId =
+    typeof window.crypto.randomUUID === 'function'
+      ? window.crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, nextId);
+  return nextId;
 }
 
 export function App() {
+  const [clientId] = useState(getOrCreateClientId);
   const [activeCueId, setActiveCueId] = useState<string>();
+  const [activePage, setActivePage] = useState<ActivePage>('home');
   const [connection, setConnection] = useState<ConnectionState>('connecting');
   const [error, setError] = useState<string>();
   const [isProcessing, setIsProcessing] = useState(false);
@@ -154,12 +230,16 @@ export function App() {
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const flushTimer = useRef<number>();
+  const lastSceneDimmingAt = useRef<number>();
+  const lastSceneDimmingPatches = useRef<FixturePatches>();
   const nextCueIndexRef = useRef(0);
   const pendingPatch = useRef<Array<DmxPatch | undefined>>([]);
   const sceneRef = useRef(scene);
   const sceneTimer = useRef<number>();
   const socketRef = useRef<WebSocket>();
   const songUrlRef = useRef<string>();
+
+  const clientLabel = createClientLabel(clientId);
 
   useEffect(() => {
     sceneRef.current = scene;
@@ -181,19 +261,28 @@ export function App() {
         }
       } catch (loadError) {
         if (!disposed) {
-          setError(loadError instanceof Error ? loadError.message : 'Could not load DMX status.');
+          setError(
+            loadError instanceof Error
+              ? loadError.message
+              : 'Could not load DMX status.',
+          );
         }
       }
     }
 
     loadInitialStatus();
-    const socket = openStatusSocket((nextSnapshot) => {
-      if (!disposed) {
-        setSnapshot(nextSnapshot);
-        setConnection('connected');
-        setError(undefined);
-      }
-    }, setConnection, setError);
+    const socket = openStatusSocket(
+      clientId,
+      (nextSnapshot) => {
+        if (!disposed) {
+          setSnapshot(nextSnapshot);
+          setConnection('connected');
+          setError(undefined);
+        }
+      },
+      setConnection,
+      setError,
+    );
     socketRef.current = socket;
 
     return () => {
@@ -209,28 +298,46 @@ export function App() {
         URL.revokeObjectURL(songUrlRef.current);
       }
     };
-  }, []);
+  }, [clientId]);
 
-  const directControl = snapshot.state.fixtures.every((fixture) =>
+  const activeFixtures = snapshot.state.fixtures.slice(0, scene.fixtureCount);
+  const directControl = activeFixtures.every((fixture) =>
     isDirectControlMode(fixture.functionMode),
   );
+  const visibleFrame = snapshot.frame.slice(0, scene.fixtureCount * 8);
   const cueCount = scene.cues.length;
   const currentCue = scene.cues.find((cue) => cue.id === activeCueId);
+  const controlLock = snapshot.controlLock;
+  const ownsControlLock = controlLock?.clientId === clientId;
+  const canSendHardwareCommands = !controlLock || ownsControlLock;
 
   function queueFixturePatch(fixtureIndex: number, patch: DmxPatch) {
-    const fixtures: Array<DmxPatch | undefined> = Array.from({ length: FIXTURE_COUNT });
+    const fixtures: Array<DmxPatch | undefined> = Array.from({
+      length: FIXTURE_COUNT,
+    });
     fixtures[fixtureIndex] = patch;
-    queueFixturePatches(fixtures);
+    void queueFixturePatches(fixtures);
   }
 
-  function queueFixturePatches(fixtures: Array<DmxPatch | undefined>, immediate = false) {
-    const normalizedFixtures = fixtures.map((patch) => (patch ? normalizePatchLoose(patch) : undefined));
+  async function queueFixturePatches(
+    fixtures: Array<DmxPatch | undefined>,
+    immediate = false,
+  ) {
+    if (!(await ensureControlLock())) {
+      return;
+    }
+
+    const normalizedFixtures = fixtures.map((patch) =>
+      patch ? normalizePatchLoose(patch) : undefined,
+    );
 
     setSnapshot((current) => {
       const nextState: ShowState = {
         fixtures: current.state.fixtures.map((fixture, index) => {
           const patch = normalizedFixtures[index];
-          return patch ? ({ ...fixture, ...patch } as FixtureState) : { ...fixture };
+          return patch
+            ? ({ ...fixture, ...patch } as FixtureState)
+            : { ...fixture };
         }),
       };
 
@@ -246,7 +353,10 @@ export function App() {
       if (!patch || Object.keys(patch).length === 0) {
         return;
       }
-      pendingPatch.current[index] = { ...pendingPatch.current[index], ...patch };
+      pendingPatch.current[index] = {
+        ...pendingPatch.current[index],
+        ...patch,
+      };
     });
 
     if (flushTimer.current) {
@@ -263,6 +373,22 @@ export function App() {
     }, 35);
   }
 
+  function applyPreset(preset: { fixtures: FixturePatches; label: string }) {
+    void queueFixturePatches(
+      normalizeFixturePatches(preset.fixtures, scene.fixtureCount),
+    );
+  }
+
+  function blackoutActiveLights() {
+    const blackout = PRESETS.find((preset) => preset.label === 'Blackout');
+    if (blackout) {
+      void queueFixturePatches(
+        normalizeFixturePatches(blackout.fixtures, scene.fixtureCount),
+        true,
+      );
+    }
+  }
+
   async function flushPatch(immediate: boolean) {
     const fixtures = pendingPatch.current;
     pendingPatch.current = [];
@@ -274,38 +400,98 @@ export function App() {
     const payload = { fixtures };
     const socket = socketRef.current;
     if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ immediate, state: payload, type: 'setState' }));
+      socket.send(
+        JSON.stringify({
+          clientId,
+          immediate,
+          state: payload,
+          type: 'setState',
+        }),
+      );
       return;
     }
 
     await postJson(`/api/state${immediate ? '?immediate=true' : ''}`, payload);
   }
 
-  async function postJson(path: string, body?: unknown) {
+  async function postJson(
+    path: string,
+    body?: unknown,
+  ): Promise<DmxSnapshot | undefined> {
     try {
       const response = await fetch(path, {
         body: body ? JSON.stringify(body) : undefined,
-        headers: body ? { 'Content-Type': 'application/json' } : undefined,
+        headers: {
+          ...(body ? { 'Content-Type': 'application/json' } : {}),
+          'X-DMX-Client-Id': clientId,
+        },
         method: 'POST',
       });
       if (!response.ok) {
         throw new Error(await response.text());
       }
-      setSnapshot((await response.json()) as DmxSnapshot);
+      const nextSnapshot = (await response.json()) as DmxSnapshot;
+      setSnapshot(nextSnapshot);
       setError(undefined);
+      return nextSnapshot;
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'DMX request failed.');
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : 'DMX request failed.',
+      );
+      return undefined;
     }
   }
 
-  function sendSocketAction(type: 'blackout' | 'reconnect') {
-    const socket = socketRef.current;
-    if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ type }));
+  async function acquireControlLock(): Promise<boolean> {
+    if (ownsControlLock) {
+      return true;
+    }
+
+    if (controlLock) {
+      const message = `Read-only: DMX control is locked by ${controlLock.label}.`;
+      setError(message);
+      setSceneMessage(message);
+      return false;
+    }
+
+    const nextSnapshot = await postJson('/api/control-lock', {
+      clientId,
+      label: clientLabel,
+    });
+    return nextSnapshot?.controlLock?.clientId === clientId;
+  }
+
+  async function ensureControlLock(): Promise<boolean> {
+    if (ownsControlLock) {
+      return true;
+    }
+
+    return acquireControlLock();
+  }
+
+  async function releaseControlLock(): Promise<void> {
+    if (!ownsControlLock) {
       return;
     }
 
-    const path = type === 'blackout' ? '/api/blackout' : '/api/device/reconnect';
+    await postJson('/api/control-lock/release', { clientId });
+  }
+
+  async function sendSocketAction(type: 'blackout' | 'reconnect') {
+    if (!(await ensureControlLock())) {
+      return;
+    }
+
+    const socket = socketRef.current;
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ clientId, type }));
+      return;
+    }
+
+    const path =
+      type === 'blackout' ? '/api/blackout' : '/api/device/reconnect';
     void postJson(path);
   }
 
@@ -329,10 +515,14 @@ export function App() {
       name: current.cues.length ? current.name : `${file.name} show`,
       songName: file.name,
     }));
-    setSceneMessage(`Loaded ${file.name}. Choose the scene light count, then import or generate cues.`);
+    setSceneMessage(
+      `Loaded ${file.name}. Choose the scene light count, then import or generate cues.`,
+    );
   }
 
-  function handleSceneFixtureCountChange(event: ChangeEvent<HTMLSelectElement>) {
+  function handleSceneFixtureCountChange(
+    event: ChangeEvent<HTMLSelectElement>,
+  ) {
     const fixtureCount = clampSceneFixtureCount(Number(event.target.value));
     setScene((current) => ({
       ...current,
@@ -343,12 +533,14 @@ export function App() {
       fixtureCount,
     }));
     setSceneMessage(
-      `Scene now targets ${fixtureCount} ${fixtureCount === 1 ? 'light' : 'lights'}. Existing cues were adjusted.`,
+      `Show now targets ${fixtureCount} ${fixtureCount === 1 ? 'light' : 'lights'}. Existing cues were adjusted.`,
     );
   }
 
   function createNewScene() {
-    setScene(createEmptyScene(scene.fixtureCount, song?.name, song?.duration ?? 0));
+    setScene(
+      createEmptyScene(scene.fixtureCount, song?.name, song?.duration ?? 0),
+    );
     setActiveCueId(undefined);
     setSceneMessage(`Started a new ${scene.fixtureCount}-light scene.`);
   }
@@ -360,9 +552,14 @@ export function App() {
     }
 
     setIsProcessing(true);
-    setSceneMessage(`Analyzing audio energy and building ${scene.fixtureCount}-light cues...`);
+    setSceneMessage(
+      `Analyzing folkloric rhythm and building ${scene.fixtureCount}-light cues...`,
+    );
     try {
-      const generated = await generateSceneFromAudio(songFile, scene.fixtureCount);
+      const generated = await generateSceneFromAudio(
+        songFile,
+        scene.fixtureCount,
+      );
       setScene(generated);
       setActiveCueId(undefined);
       setSceneMessage(
@@ -370,7 +567,9 @@ export function App() {
       );
     } catch (processError) {
       setSceneMessage(
-        processError instanceof Error ? processError.message : 'Could not process the uploaded song.',
+        processError instanceof Error
+          ? processError.message
+          : 'Could not process the uploaded song.',
       );
     } finally {
       setIsProcessing(false);
@@ -391,14 +590,20 @@ export function App() {
         `Imported ${imported.cues.length} cues for ${imported.fixtureCount} ${imported.fixtureCount === 1 ? 'light' : 'lights'} from ${file.name}.`,
       );
     } catch (importError) {
-      setSceneMessage(importError instanceof Error ? importError.message : 'Could not import scene JSON.');
+      setSceneMessage(
+        importError instanceof Error
+          ? importError.message
+          : 'Could not import scene JSON.',
+      );
     } finally {
       event.target.value = '';
     }
   }
 
   function exportScene() {
-    const blob = new Blob([JSON.stringify(scene, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(scene, null, 2)], {
+      type: 'application/json',
+    });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -412,7 +617,9 @@ export function App() {
   function addManualCue() {
     const time = roundTime(audioRef.current?.currentTime ?? 0);
     const cue: SceneCue = {
-      fixtures: snapshot.state.fixtures.slice(0, scene.fixtureCount).map(fixtureToPatch),
+      fixtures: snapshot.state.fixtures
+        .slice(0, scene.fixtureCount)
+        .map(fixtureToPatch),
       id: createId(),
       label: `Manual ${formatTime(time)}`,
       time,
@@ -420,7 +627,9 @@ export function App() {
 
     setScene((current) => ({
       ...current,
-      cues: [...current.cues, cue].sort((left, right) => left.time - right.time),
+      cues: [...current.cues, cue].sort(
+        (left, right) => left.time - right.time,
+      ),
     }));
     setActiveCueId(cue.id);
     setSceneMessage(
@@ -439,11 +648,14 @@ export function App() {
   function applyCue(cue: SceneCue, seekAudio = false) {
     if (seekAudio && audioRef.current) {
       audioRef.current.currentTime = cue.time;
-      nextCueIndexRef.current = findNextCueIndex(cue.time, sceneRef.current.cues);
+      nextCueIndexRef.current = findNextCueIndex(
+        cue.time,
+        sceneRef.current.cues,
+      );
     }
 
     setActiveCueId(cue.id);
-    queueFixturePatches(cue.fixtures, true);
+    void queueFixturePatches(cue.fixtures, true);
   }
 
   async function playScene() {
@@ -452,8 +664,23 @@ export function App() {
       return;
     }
 
-    nextCueIndexRef.current = findNextCueIndex(audioRef.current.currentTime, sceneRef.current.cues);
+    if (!(await ensureControlLock())) {
+      return;
+    }
+
+    nextCueIndexRef.current = findNextCueIndex(
+      audioRef.current.currentTime,
+      sceneRef.current.cues,
+    );
     await audioRef.current.play();
+  }
+
+  async function handleAudioPlay() {
+    if (!(await ensureControlLock())) {
+      audioRef.current?.pause();
+      return;
+    }
+
     startSceneClock();
   }
 
@@ -487,8 +714,31 @@ export function App() {
         nextCueIndexRef.current < cues.length &&
         cues[nextCueIndexRef.current].time <= audio.currentTime + 0.045
       ) {
-        applyCue(cues[nextCueIndexRef.current]);
+        setActiveCueId(cues[nextCueIndexRef.current].id);
         nextCueIndexRef.current += 1;
+      }
+
+      if (
+        cues.length &&
+        (lastSceneDimmingAt.current === undefined ||
+          audio.currentTime - lastSceneDimmingAt.current >=
+            SCENE_DIMMING_INTERVAL_SECONDS)
+      ) {
+        const dimmingPatches = sceneDimmingPatchesAt(
+          cues,
+          audio.currentTime,
+          sceneRef.current.fixtureCount,
+        );
+        if (
+          shouldSendSceneDimming(
+            dimmingPatches,
+            lastSceneDimmingPatches.current,
+          )
+        ) {
+          void queueFixturePatches(dimmingPatches, true);
+          lastSceneDimmingPatches.current = dimmingPatches;
+        }
+        lastSceneDimmingAt.current = audio.currentTime;
       }
 
       sceneTimer.current = window.requestAnimationFrame(tick);
@@ -504,7 +754,52 @@ export function App() {
     }
     if (updateState) {
       setIsPlaying(false);
+      if (activePage === 'music') {
+        void releaseControlLock();
+      }
     }
+    lastSceneDimmingAt.current = undefined;
+    lastSceneDimmingPatches.current = undefined;
+  }
+
+  function shouldSendSceneDimming(
+    next: FixturePatches,
+    previous?: FixturePatches,
+  ) {
+    if (!next.length || !previous) {
+      return next.length > 0;
+    }
+
+    return next.some((patch, fixtureIndex) => {
+      const previousPatch = previous[fixtureIndex] ?? {};
+
+      for (const key of SCENE_DIMMING_KEYS) {
+        if ((patch[key] ?? 0) !== (previousPatch[key] ?? 0)) {
+          return true;
+        }
+      }
+
+      return (
+        patch.functionMode !== previousPatch.functionMode ||
+        patch.functionSpeed !== previousPatch.functionSpeed ||
+        patch.strobe !== previousPatch.strobe
+      );
+    });
+  }
+
+  function openPage(page: Exclude<ActivePage, 'home'>) {
+    setActivePage(page);
+    setSceneMessage(undefined);
+  }
+
+  function returnHome() {
+    if (isPlaying) {
+      setSceneMessage('Pause Music Sync before leaving this page.');
+      return;
+    }
+
+    void releaseControlLock();
+    setActivePage('home');
   }
 
   return (
@@ -514,203 +809,408 @@ export function App() {
           <p className="eyebrow">uDMX dance show controller</p>
           <h1>Two-Light Scene Studio</h1>
           <p className="heroCopy">
-            Control two 8-channel fixtures, upload a track, generate or hand-build cues, then play
-            the song and lighting scene together.
+            Control two 8-channel fixtures, upload a track, generate or
+            hand-build cues, then play the song and lighting scene together.
           </p>
         </div>
-        <DeviceCard connection={connection} snapshot={snapshot} />
+        <DeviceCard
+          connection={connection}
+          disabled={!canSendHardwareCommands}
+          onReconnect={() => void sendSocketAction('reconnect')}
+          snapshot={snapshot}
+        />
       </section>
 
       {error ? <div className="errorBanner">{error}</div> : null}
-      {!directControl ? (
+      <ControlLockBanner
+        canSendHardwareCommands={canSendHardwareCommands}
+        clientLabel={clientLabel}
+        disabled={isPlaying}
+        lock={controlLock}
+        onAcquire={() => void acquireControlLock()}
+        onRelease={() => void releaseControlLock()}
+        ownsLock={ownsControlLock}
+      />
+      {activePage !== 'home' && !directControl ? (
         <div className="modeBanner">
-          One or both lights are using a CH7 macro mode. RGBW sliders only have full manual control
-          when CH7 is in <strong>DMX 8CH Control</strong>.
+          One or more selected lights are using a CH7 macro mode. RGBW sliders
+          only have full manual control when CH7 is in{' '}
+          <strong>DMX 8CH Control</strong>.
         </div>
       ) : null}
 
-      <section className="showGrid">
-        <div className="panel timelinePanel">
-          <PanelHeader kicker="Music sync" title="Track + Scene" />
-          <div className="uploadGrid">
-            <label className="fileDrop">
-              <span>Upload song</span>
-              <input accept="audio/*" onChange={handleSongUpload} type="file" />
-            </label>
-            <label className="fileDrop">
-              <span>Import scene JSON</span>
-              <input accept="application/json,.json" onChange={importScene} type="file" />
-            </label>
+      {activePage === 'home' ? (
+        <section className="homeChoice">
+          <div className="homeIntro">
+            <p className="eyebrow">Choose control mode</p>
+            <h2>What do you want to run?</h2>
+            <p>
+              Pick one workflow before touching fixtures. Music Sync stays
+              isolated while playback is running, so manual light controls
+              cannot be opened by accident.
+            </p>
           </div>
+          <div className="homeCards">
+            <button
+              className="homeCard"
+              onClick={() => openPage('control')}
+              type="button"
+            >
+              <span>Control Light</span>
+              <strong>Manual Light Control</strong>
+              <small>
+                Control Light A/B, 3D scene, fast looks, and DMX output.
+              </small>
+            </button>
+            <button
+              className="homeCard"
+              onClick={() => openPage('music')}
+              type="button"
+            >
+              <span>Music Sync</span>
+              <strong>Music-Synced Show</strong>
+              <small>
+                Upload a track, build the timeline, and monitor the 3D theater
+                viewer.
+              </small>
+            </button>
+          </div>
+        </section>
+      ) : (
+        <>
+          <section className="pageHeader">
+            <button
+              className="secondaryButton"
+              disabled={isPlaying}
+              onClick={returnHome}
+              type="button"
+            >
+              Back to mode selection
+            </button>
+            <div>
+              <p className="eyebrow">
+                {activePage === 'control' ? 'Manual control' : 'Music sync'}
+              </p>
+              <h2>
+                {activePage === 'control'
+                  ? 'Control Light A/B'
+                  : 'Music Sync Page'}
+              </h2>
+              {isPlaying ? (
+                <small>Pause Music Sync before leaving this page.</small>
+              ) : null}
+            </div>
+          </section>
 
-          <div className="sceneSetup">
-            <label>
-              <span>Lights in this scene</span>
-              <select onChange={handleSceneFixtureCountChange} value={scene.fixtureCount}>
-                {FIXTURE_CONFIGS.map((fixture, index) => (
-                  <option key={fixture.id} value={index + 1}>
-                    {index + 1} {index === 0 ? 'light' : 'lights'}
-                  </option>
+          <section className="scopePanel">
+            <div className="lightScope">
+              <label>
+                <span>Lights enabled</span>
+                <select
+                  onChange={handleSceneFixtureCountChange}
+                  value={scene.fixtureCount}
+                >
+                  {FIXTURE_CONFIGS.map((fixture, index) => (
+                    <option key={fixture.id} value={index + 1}>
+                      {index + 1} {index === 0 ? 'light' : 'lights'}
+                    </option>
+                  ))}
+                </select>
+                <small>
+                  All controls, presets, cues, and previews target A001, then
+                  A009.
+                </small>
+              </label>
+              {activePage === 'music' ? (
+                <button
+                  className="blackoutButton scopeBlackout"
+                  disabled={!canSendHardwareCommands}
+                  onClick={blackoutActiveLights}
+                  type="button"
+                >
+                  Turn Off Lights
+                </button>
+              ) : null}
+            </div>
+          </section>
+
+          {activePage === 'control' ? (
+            <>
+              <section
+                className="fixtureGrid"
+                aria-label="Control selected lights"
+              >
+                {activeFixtures.map((fixture, index) => (
+                  <FixtureControl
+                    fixture={fixture}
+                    fixtureIndex={index}
+                    key={FIXTURE_CONFIGS[index]?.id ?? index}
+                    onPatch={(patch) => queueFixturePatch(index, patch)}
+                    disabled={!canSendHardwareCommands}
+                  />
                 ))}
-              </select>
-              <small>Scene cues target the first selected fixtures: A001, then A009.</small>
-            </label>
-            <button onClick={createNewScene} type="button">
-              New Empty Scene
-            </button>
-          </div>
+              </section>
 
-          {song ? (
-            <audio
-              className="audioPlayer"
-              controls
-              onEnded={() => stopSceneClock()}
-              onLoadedMetadata={(event) => {
-                const duration = roundTime(event.currentTarget.duration);
-                setSong((current) => (current ? { ...current, duration } : current));
-                setScene((current) => ({ ...current, duration }));
-              }}
-              onPause={() => stopSceneClock()}
-              onPlay={() => startSceneClock()}
-              onSeeked={() => {
-                const time = audioRef.current?.currentTime ?? 0;
-                nextCueIndexRef.current = findNextCueIndex(time, sceneRef.current.cues);
-              }}
-              ref={audioRef}
-              src={song.url}
-            />
-          ) : (
-            <div className="emptyAudio">Upload an audio file to enable synchronized playback.</div>
-          )}
-
-          <div className="sceneActions">
-            <button disabled={!songFile || isProcessing} onClick={() => void processSong()} type="button">
-              {isProcessing ? 'Processing...' : 'Auto-Generate Scene'}
-            </button>
-            <button disabled={!song} onClick={() => void playScene()} type="button">
-              {isPlaying ? 'Playing Scene' : 'Play Scene'}
-            </button>
-            <button disabled={!song} onClick={pauseScene} type="button">
-              Pause
-            </button>
-            <button disabled={!song} onClick={stopScene} type="button">
-              Stop
-            </button>
-            <button onClick={addManualCue} type="button">
-              Add Manual Cue
-            </button>
-            <button disabled={!cueCount} onClick={exportScene} type="button">
-              Export Scene
-            </button>
-          </div>
-
-          <div className="sceneStats">
-            <div>
-              <span>Scene</span>
-              <strong>{scene.name}</strong>
-            </div>
-            <div>
-              <span>Cues</span>
-              <strong>{cueCount}</strong>
-            </div>
-            <div>
-              <span>Lights</span>
-              <strong>{scene.fixtureCount}</strong>
-            </div>
-            <div>
-              <span>Track</span>
-              <strong>{song?.duration ? formatTime(song.duration) : formatTime(scene.duration)}</strong>
-            </div>
-            <div>
-              <span>Active</span>
-              <strong>{currentCue ? currentCue.label : 'None'}</strong>
-            </div>
-          </div>
-          {sceneMessage ? <p className="sceneMessage">{sceneMessage}</p> : null}
-        </div>
-
-        <div className="panel cuePanel">
-          <PanelHeader kicker="Timeline" title="Scene Cues" />
-          <div className="cueList">
-            {scene.cues.length ? (
-              scene.cues.map((cue) => (
-                <div className={cue.id === activeCueId ? 'cueRow active' : 'cueRow'} key={cue.id}>
-                  <button onClick={() => applyCue(cue, true)} type="button">
-                    <strong>{formatTime(cue.time)}</strong>
-                    <span>
-                      {cue.label} · {cue.fixtures.length} {cue.fixtures.length === 1 ? 'light' : 'lights'}
-                    </span>
-                  </button>
-                  <button className="deleteCue" onClick={() => deleteCue(cue.id)} type="button">
-                    Delete
-                  </button>
+              <section className="viewerSection">
+                <div className="panel viewerPanel">
+                  <TheaterViewer fixtures={activeFixtures} />
                 </div>
-              ))
-            ) : (
-              <div className="emptyAudio">No cues yet. Generate from the song or capture manual cues.</div>
-            )}
-          </div>
-        </div>
-      </section>
+              </section>
 
-      <section className="viewerSection">
-        <div className="panel viewerPanel">
-          <TheaterViewer fixtures={snapshot.state.fixtures} />
-        </div>
-      </section>
+              <section className="dashboardGrid">
+                <div className="panel actionsPanel">
+                  <PanelHeader
+                    kicker="Fast looks"
+                    title={
+                      scene.fixtureCount === 1
+                        ? 'One-Light Presets'
+                        : 'Two-Light Presets'
+                    }
+                  />
+                  <div className="presetGrid">
+                    {PRESETS.map((preset) => (
+                      <button
+                        disabled={!canSendHardwareCommands}
+                        key={preset.label}
+                        onClick={() => applyPreset(preset)}
+                        type="button"
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="dangerZone">
+                    <button
+                      className="blackoutButton"
+                      disabled={!canSendHardwareCommands}
+                      onClick={blackoutActiveLights}
+                      type="button"
+                    >
+                      Blackout Selected
+                    </button>
+                  </div>
+                </div>
 
-      <section className="fixtureGrid">
-        {snapshot.state.fixtures.map((fixture, index) => (
-          <FixtureControl
-            fixture={fixture}
-            fixtureIndex={index}
-            key={FIXTURE_CONFIGS[index]?.id ?? index}
-            onPatch={(patch) => queueFixturePatch(index, patch)}
-          />
-        ))}
-      </section>
+                <div className="panel framePanel">
+                  <PanelHeader
+                    kicker="DMX output"
+                    title={`${visibleFrame.length}-Channel Frame`}
+                  />
+                  <div className="frameReadout">
+                    {visibleFrame.map((value, index) => (
+                      <div key={index}>
+                        <span>CH{index + 1}</span>
+                        <strong>{value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </section>
+            </>
+          ) : (
+            <>
+              <section className="showGrid">
+                <div className="panel timelinePanel">
+                  <PanelHeader kicker="Music sync" title="Track + Scene" />
+                  <div className="uploadGrid">
+                    <label className="fileDrop">
+                      <span>Upload song</span>
+                      <input
+                        accept="audio/*"
+                        onChange={handleSongUpload}
+                        type="file"
+                      />
+                    </label>
+                    <label className="fileDrop">
+                      <span>Import scene JSON</span>
+                      <input
+                        accept="application/json,.json"
+                        onChange={importScene}
+                        type="file"
+                      />
+                    </label>
+                  </div>
 
-      <section className="dashboardGrid">
-        <div className="panel actionsPanel">
-          <PanelHeader kicker="Fast looks" title="Two-Light Presets" />
-          <div className="presetGrid">
-            {PRESETS.map((preset) => (
-              <button key={preset.label} onClick={() => queueFixturePatches(preset.fixtures)} type="button">
-                {preset.label}
-              </button>
-            ))}
-          </div>
-          <div className="dangerZone">
-            <button className="blackoutButton" onClick={() => sendSocketAction('blackout')} type="button">
-              Blackout
-            </button>
-            <button className="secondaryButton" onClick={() => sendSocketAction('reconnect')} type="button">
-              Reconnect uDMX
-            </button>
-          </div>
-        </div>
+                  <div className="sceneSetup">
+                    <div>
+                      <span>Scene target</span>
+                      <small>
+                        Cues target {scene.fixtureCount}{' '}
+                        {scene.fixtureCount === 1 ? 'light' : 'lights'}: A001
+                        {scene.fixtureCount > 1 ? ', then A009' : ''}.
+                      </small>
+                    </div>
+                    <button onClick={createNewScene} type="button">
+                      New Empty Scene
+                    </button>
+                  </div>
 
-        <div className="panel framePanel">
-          <PanelHeader kicker="DMX output" title="16-Channel Frame" />
-          <div className="frameReadout">
-            {snapshot.frame.map((value, index) => (
-              <div key={index}>
-                <span>CH{index + 1}</span>
-                <strong>{value}</strong>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
+                  {song ? (
+                    <audio
+                      className="audioPlayer"
+                      controls
+                      onEnded={() => stopSceneClock()}
+                      onLoadedMetadata={(event) => {
+                        const duration = roundTime(
+                          event.currentTarget.duration,
+                        );
+                        setSong((current) =>
+                          current ? { ...current, duration } : current,
+                        );
+                        setScene((current) => ({ ...current, duration }));
+                      }}
+                      onPause={() => stopSceneClock()}
+                      onPlay={() => void handleAudioPlay()}
+                      onSeeked={() => {
+                        const time = audioRef.current?.currentTime ?? 0;
+                        nextCueIndexRef.current = findNextCueIndex(
+                          time,
+                          sceneRef.current.cues,
+                        );
+                      }}
+                      ref={audioRef}
+                      src={song.url}
+                    />
+                  ) : (
+                    <div className="emptyAudio">
+                      Upload an audio file to enable synchronized playback.
+                    </div>
+                  )}
+
+                  <div className="sceneActions">
+                    <button
+                      disabled={!songFile || isProcessing}
+                      onClick={() => void processSong()}
+                      type="button"
+                    >
+                      {isProcessing
+                        ? 'Processing...'
+                        : 'Generate Folkloric Scene'}
+                    </button>
+                    <button
+                      disabled={!cueCount || !canSendHardwareCommands}
+                      onClick={() => applyCue(scene.cues[0])}
+                      type="button"
+                    >
+                      Preview Scene Start
+                    </button>
+                    <button
+                      disabled={!song || !canSendHardwareCommands}
+                      onClick={() => void playScene()}
+                      type="button"
+                    >
+                      {isPlaying ? 'Playing Scene' : 'Play Scene'}
+                    </button>
+                    <button disabled={!song} onClick={pauseScene} type="button">
+                      Pause
+                    </button>
+                    <button disabled={!song} onClick={stopScene} type="button">
+                      Stop
+                    </button>
+                    <button onClick={addManualCue} type="button">
+                      Add Manual Cue
+                    </button>
+                    <button
+                      disabled={!cueCount}
+                      onClick={exportScene}
+                      type="button"
+                    >
+                      Export Scene
+                    </button>
+                  </div>
+
+                  <div className="sceneStats">
+                    <div>
+                      <span>Scene</span>
+                      <strong>{scene.name}</strong>
+                    </div>
+                    <div>
+                      <span>Cues</span>
+                      <strong>{cueCount}</strong>
+                    </div>
+                    <div>
+                      <span>Lights</span>
+                      <strong>{scene.fixtureCount}</strong>
+                    </div>
+                    <div>
+                      <span>Track</span>
+                      <strong>
+                        {song?.duration
+                          ? formatTime(song.duration)
+                          : formatTime(scene.duration)}
+                      </strong>
+                    </div>
+                    <div>
+                      <span>Active</span>
+                      <strong>{currentCue ? currentCue.label : 'None'}</strong>
+                    </div>
+                  </div>
+                  {sceneMessage ? (
+                    <p className="sceneMessage">{sceneMessage}</p>
+                  ) : null}
+                </div>
+
+                <div className="panel cuePanel">
+                  <PanelHeader kicker="Timeline" title="Scene Cues" />
+                  <div className="cueList">
+                    {scene.cues.length ? (
+                      scene.cues.map((cue) => (
+                        <div
+                          className={
+                            cue.id === activeCueId ? 'cueRow active' : 'cueRow'
+                          }
+                          key={cue.id}
+                        >
+                          <button
+                            disabled={!canSendHardwareCommands}
+                            onClick={() => applyCue(cue, true)}
+                            type="button"
+                          >
+                            <strong>{formatTime(cue.time)}</strong>
+                            <span>
+                              {cue.label} · {cue.fixtures.length}{' '}
+                              {cue.fixtures.length === 1 ? 'light' : 'lights'}
+                            </span>
+                          </button>
+                          <button
+                            className="deleteCue"
+                            onClick={() => deleteCue(cue.id)}
+                            type="button"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="emptyAudio">
+                        No cues yet. Generate from the song or capture manual
+                        cues.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </section>
+
+              <section className="viewerSection">
+                <div className="panel viewerPanel">
+                  <TheaterViewer fixtures={activeFixtures} />
+                </div>
+              </section>
+            </>
+          )}
+        </>
+      )}
     </main>
   );
 }
 
 function FixtureControl({
+  disabled,
   fixture,
   fixtureIndex,
   onPatch,
 }: {
+  disabled: boolean;
   fixture: FixtureState;
   fixtureIndex: number;
   onPatch: (patch: DmxPatch) => void;
@@ -739,18 +1239,62 @@ function FixtureControl({
       </div>
 
       <div className="fixtureSliders">
-        <Slider channelKey="master" fixtureIndex={fixtureIndex} onChange={onPatch} state={fixture} />
-        <Slider channelKey="red" fixtureIndex={fixtureIndex} onChange={onPatch} state={fixture} tone="red" />
-        <Slider channelKey="green" fixtureIndex={fixtureIndex} onChange={onPatch} state={fixture} tone="green" />
-        <Slider channelKey="blue" fixtureIndex={fixtureIndex} onChange={onPatch} state={fixture} tone="blue" />
-        <Slider channelKey="white" fixtureIndex={fixtureIndex} onChange={onPatch} state={fixture} tone="white" />
-        <Slider channelKey="strobe" fixtureIndex={fixtureIndex} onChange={onPatch} state={fixture} tone="amber" />
+        <Slider
+          disabled={disabled}
+          channelKey="master"
+          fixtureIndex={fixtureIndex}
+          onChange={onPatch}
+          state={fixture}
+        />
+        <Slider
+          disabled={disabled}
+          channelKey="red"
+          fixtureIndex={fixtureIndex}
+          onChange={onPatch}
+          state={fixture}
+          tone="red"
+        />
+        <Slider
+          disabled={disabled}
+          channelKey="green"
+          fixtureIndex={fixtureIndex}
+          onChange={onPatch}
+          state={fixture}
+          tone="green"
+        />
+        <Slider
+          disabled={disabled}
+          channelKey="blue"
+          fixtureIndex={fixtureIndex}
+          onChange={onPatch}
+          state={fixture}
+          tone="blue"
+        />
+        <Slider
+          disabled={disabled}
+          channelKey="white"
+          fixtureIndex={fixtureIndex}
+          onChange={onPatch}
+          state={fixture}
+          tone="white"
+        />
+        <Slider
+          disabled={disabled}
+          channelKey="strobe"
+          fixtureIndex={fixtureIndex}
+          onChange={onPatch}
+          state={fixture}
+          tone="amber"
+        />
       </div>
 
       <div className="modeList compact">
         {FUNCTION_MODES.map((mode) => (
           <button
-            className={activeMode.id === mode.id ? 'modeButton active' : 'modeButton'}
+            className={
+              activeMode.id === mode.id ? 'modeButton active' : 'modeButton'
+            }
+            disabled={disabled}
             key={mode.id}
             onClick={() => onPatch({ functionMode: mode.value })}
             type="button"
@@ -764,6 +1308,7 @@ function FixtureControl({
       </div>
       <Slider
         channelKey="functionSpeed"
+        disabled={disabled}
         fixtureIndex={fixtureIndex}
         onChange={onPatch}
         state={fixture}
@@ -773,24 +1318,105 @@ function FixtureControl({
   );
 }
 
-function DeviceCard({ connection, snapshot }: { connection: ConnectionState; snapshot: DmxSnapshot }) {
+function DeviceCard({
+  connection,
+  disabled,
+  onReconnect,
+  snapshot,
+}: {
+  connection: ConnectionState;
+  disabled: boolean;
+  onReconnect: () => void;
+  snapshot: DmxSnapshot;
+}) {
   const status = snapshot.device;
   const online = status.connected && connection === 'connected';
   return (
     <aside className="deviceCard">
       <div className={online ? 'statusDot online' : 'statusDot'} />
-      <div>
-        <p className="deviceTitle">{status.driver === 'udmx' ? 'uDMX hardware' : 'Mock output'}</p>
+      <div className="deviceInfo">
+        <p className="deviceTitle">
+          {status.driver === 'udmx' ? 'uDMX hardware' : 'Mock output'}
+        </p>
         <p>{status.detail}</p>
-        {status.lastError ? <p className="deviceError">{status.lastError}</p> : null}
+        {status.lastError ? (
+          <p className="deviceError">{status.lastError}</p>
+        ) : null}
         <small>
-          {status.vendorId && status.productId ? `${status.vendorId}:${status.productId} · ` : ''}
+          {status.vendorId && status.productId
+            ? `${status.vendorId}:${status.productId} · `
+            : ''}
           {status.writeMode ? `${status.writeMode} mode · ` : ''}
           {connection} · {status.writes} writes
           {status.failures ? ` · ${status.failures} failures` : ''}
         </small>
+        <button
+          className="secondaryButton deviceReconnect"
+          disabled={disabled}
+          onClick={onReconnect}
+          type="button"
+        >
+          Reconnect uDMX
+        </button>
       </div>
     </aside>
+  );
+}
+
+function ControlLockBanner({
+  canSendHardwareCommands,
+  clientLabel,
+  disabled,
+  lock,
+  onAcquire,
+  onRelease,
+  ownsLock,
+}: {
+  canSendHardwareCommands: boolean;
+  clientLabel: string;
+  disabled: boolean;
+  lock: DmxSnapshot['controlLock'];
+  onAcquire: () => void;
+  onRelease: () => void;
+  ownsLock: boolean;
+}) {
+  const className = ownsLock
+    ? 'lockBanner owned'
+    : canSendHardwareCommands
+      ? 'lockBanner'
+      : 'lockBanner blocked';
+  const title = ownsLock
+    ? 'Hardware control active'
+    : lock
+      ? 'Read-only browser'
+      : 'Hardware control available';
+  const detail = ownsLock
+    ? `${clientLabel} owns DMX commands from this browser.`
+    : lock
+      ? `${lock.label} is controlling the lights. This browser can watch but cannot send DMX commands.`
+      : 'Take control before running lights from this browser.';
+
+  return (
+    <section className={className}>
+      <div>
+        <strong>{title}</strong>
+        <span>{detail}</span>
+      </div>
+      {ownsLock ? (
+        <button
+          className="secondaryButton"
+          disabled={disabled}
+          onClick={onRelease}
+          type="button"
+        >
+          Release Control
+        </button>
+      ) : !lock ? (
+        <button className="secondaryButton" onClick={onAcquire} type="button">
+          Take Control
+        </button>
+      ) : null}
+    </section>
   );
 }
 
@@ -805,12 +1431,14 @@ function PanelHeader({ kicker, title }: { kicker: string; title: string }) {
 
 function Slider({
   channelKey,
+  disabled,
   fixtureIndex,
   onChange,
   state,
   tone = 'neutral',
 }: {
   channelKey: keyof FixtureState;
+  disabled: boolean;
   fixtureIndex: number;
   onChange: (patch: DmxPatch) => void;
   state: FixtureState;
@@ -833,7 +1461,10 @@ function Slider({
       <input
         max="255"
         min="0"
-        onChange={(event) => onChange({ [channelKey]: Number(event.target.value) })}
+        disabled={disabled}
+        onChange={(event) =>
+          onChange({ [channelKey]: Number(event.target.value) })
+        }
         type="range"
         value={value}
       />
@@ -843,12 +1474,15 @@ function Slider({
 }
 
 function openStatusSocket(
+  clientId: string,
   onSnapshot: (snapshot: DmxSnapshot) => void,
   setConnection: (state: ConnectionState) => void,
   setError: (message: string | undefined) => void,
 ): WebSocket {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+  const socket = new WebSocket(
+    `${protocol}//${window.location.host}/ws?clientId=${encodeURIComponent(clientId)}`,
+  );
 
   setConnection('connecting');
 
@@ -875,63 +1509,28 @@ function openStatusSocket(
 
   socket.addEventListener('error', () => {
     setConnection('offline');
-    setError('Live connection to the DMX backend failed. REST fallback remains available.');
+    setError(
+      'Live connection to the DMX backend failed. REST fallback remains available.',
+    );
   });
 
   return socket;
 }
 
-async function generateSceneFromAudio(file: File, fixtureCount: number): Promise<TrackScene> {
-  const normalizedFixtureCount = clampSceneFixtureCount(fixtureCount);
+async function generateSceneFromAudio(
+  file: File,
+  fixtureCount: number,
+): Promise<TrackScene> {
   const audioContext = new AudioContext();
   try {
     const buffer = await audioContext.decodeAudioData(await file.arrayBuffer());
-    const samples = mixDown(buffer);
-    const sampleRate = buffer.sampleRate;
-    const windowSize = Math.max(1, Math.floor(sampleRate * 0.28));
-    const hopSize = Math.max(1, Math.floor(sampleRate * 0.14));
-    const energies: Array<{ energy: number; time: number }> = [];
-
-    for (let start = 0; start < samples.length; start += hopSize) {
-      let sum = 0;
-      const end = Math.min(samples.length, start + windowSize);
-      for (let index = start; index < end; index += 1) {
-        sum += samples[index] * samples[index];
-      }
-      energies.push({ energy: Math.sqrt(sum / Math.max(1, end - start)), time: start / sampleRate });
-    }
-
-    const average = energies.reduce((sum, item) => sum + item.energy, 0) / Math.max(1, energies.length);
-    const peak = energies.reduce((max, item) => Math.max(max, item.energy), 0);
-    const threshold = average + (peak - average) * 0.38;
-    const cueTimes: number[] = [];
-    let lastCueTime = -1;
-
-    for (let index = 1; index < energies.length - 1; index += 1) {
-      const current = energies[index];
-      const isLocalPeak = current.energy >= energies[index - 1].energy && current.energy > energies[index + 1].energy;
-      if (isLocalPeak && current.energy >= threshold && current.time - lastCueTime >= 0.45) {
-        cueTimes.push(roundTime(current.time));
-        lastCueTime = current.time;
-      }
-    }
-
-    if (cueTimes.length < 8) {
-      cueTimes.splice(0, cueTimes.length, ...fallbackCueTimes(buffer.duration));
-    }
-
-    const cues = cueTimes
-      .slice(0, 220)
-      .map((time, index) => createAutoCue(time, index, normalizedFixtureCount));
-    return {
-      createdAt: new Date().toISOString(),
-      cues,
-      duration: roundTime(buffer.duration),
-      fixtureCount: normalizedFixtureCount,
-      name: `${file.name} auto scene`,
+    return generateFolkloricSceneFromSamples({
+      duration: buffer.duration,
+      fixtureCount,
+      sampleRate: buffer.sampleRate,
+      samples: mixDown(buffer),
       songName: file.name,
-      version: 1,
-    };
+    });
   } finally {
     await audioContext.close();
   }
@@ -946,145 +1545,4 @@ function mixDown(buffer: AudioBuffer): Float32Array {
     }
   }
   return output;
-}
-
-function createAutoCue(time: number, index: number, fixtureCount: number): SceneCue {
-  const base = AUTO_PALETTES[index % AUTO_PALETTES.length];
-  const strongHit = index % 8 === 0;
-  const normalizedFixtureCount = clampSceneFixtureCount(fixtureCount);
-  const accentFixture = normalizedFixtureCount > 1 ? 1 : 0;
-  return {
-    fixtures: normalizeFixturePatches(base, normalizedFixtureCount).map((patch, fixtureIndex) => ({
-      ...patch,
-      functionMode: 0,
-      master: strongHit ? 255 : patch.master,
-      strobe: strongHit && fixtureIndex === accentFixture ? 80 : 0,
-    })),
-    id: createId(),
-    label: strongHit ? `Accent ${index + 1}` : `Auto ${index + 1}`,
-    time,
-  };
-}
-
-function fallbackCueTimes(duration: number): number[] {
-  const times: number[] = [];
-  for (let time = 0; time < duration; time += 2) {
-    times.push(roundTime(time));
-  }
-  return times;
-}
-
-function normalizeImportedScene(input: unknown): TrackScene {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    throw new Error('Scene file must contain a JSON object.');
-  }
-
-  const source = input as Partial<TrackScene>;
-  const fixtureCount = clampSceneFixtureCount(
-    source.fixtureCount,
-    inferFixtureCount(Array.isArray(source.cues) ? source.cues : []),
-  );
-  const cues = Array.isArray(source.cues)
-    ? source.cues.map((cueInput, index) => normalizeImportedCue(cueInput, index, fixtureCount))
-    : [];
-
-  if (!cues.length) {
-    throw new Error('Scene file does not contain any cues.');
-  }
-
-  return {
-    createdAt: typeof source.createdAt === 'string' ? source.createdAt : new Date().toISOString(),
-    cues: cues.sort((left, right) => left.time - right.time),
-    duration: typeof source.duration === 'number' ? roundTime(source.duration) : 0,
-    fixtureCount,
-    name: typeof source.name === 'string' ? source.name : 'Imported dance show',
-    songName: typeof source.songName === 'string' ? source.songName : undefined,
-    version: 1,
-  };
-}
-
-function normalizeImportedCue(input: unknown, index: number, fixtureCount: number): SceneCue {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    throw new Error(`Cue ${index + 1} must be an object.`);
-  }
-
-  const source = input as Partial<SceneCue>;
-  if (typeof source.time !== 'number') {
-    throw new Error(`Cue ${index + 1} is missing a numeric time.`);
-  }
-
-  const fixtureInputs = Array.isArray(source.fixtures) ? source.fixtures : [];
-  return {
-    fixtures: normalizeFixturePatches(fixtureInputs, fixtureCount),
-    id: typeof source.id === 'string' ? source.id : createId(),
-    label: typeof source.label === 'string' ? source.label : `Cue ${index + 1}`,
-    time: roundTime(source.time),
-  };
-}
-
-function normalizeFixturePatches(inputs: unknown[], fixtureCount: number): FixturePatches {
-  const normalizedFixtureCount = clampSceneFixtureCount(fixtureCount);
-  return Array.from({ length: normalizedFixtureCount }, (_unused, index) =>
-    normalizePatchLoose(inputs[index]),
-  );
-}
-
-function inferFixtureCount(cues: unknown[]): number {
-  const maxCueFixtures = cues.reduce<number>((max, cueInput) => {
-    if (!cueInput || typeof cueInput !== 'object' || Array.isArray(cueInput)) {
-      return max;
-    }
-    const fixtures = (cueInput as Partial<SceneCue>).fixtures;
-    return Array.isArray(fixtures) ? Math.max(max, fixtures.length) : max;
-  }, 1);
-
-  return clampSceneFixtureCount(maxCueFixtures);
-}
-
-function clampSceneFixtureCount(value: unknown, fallback = FIXTURE_COUNT): number {
-  const parsed = typeof value === 'number' ? value : Number(value);
-  if (!Number.isFinite(parsed)) {
-    return Math.min(FIXTURE_COUNT, Math.max(1, Math.round(fallback)));
-  }
-
-  return Math.min(FIXTURE_COUNT, Math.max(1, Math.round(parsed)));
-}
-
-function normalizePatchLoose(input: unknown): DmxPatch {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) {
-    return {};
-  }
-
-  const patch: DmxPatch = {};
-  for (const [key, value] of Object.entries(input)) {
-    if (!CHANNEL_KEYS.includes(key as keyof FixtureState) || typeof value !== 'number') {
-      continue;
-    }
-    patch[key as keyof FixtureState] = clampDmxByte(value);
-  }
-  return patch;
-}
-
-function fixtureToPatch(fixture: FixtureState): DmxPatch {
-  return { ...fixture };
-}
-
-function findNextCueIndex(time: number, cues: SceneCue[]): number {
-  const index = cues.findIndex((cue) => cue.time >= time - 0.03);
-  return index === -1 ? cues.length : index;
-}
-
-function createId(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function formatTime(seconds: number): string {
-  const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
-  const minutes = Math.floor(safeSeconds / 60);
-  const rest = safeSeconds - minutes * 60;
-  return `${minutes}:${rest.toFixed(1).padStart(4, '0')}`;
-}
-
-function roundTime(value: number): number {
-  return Math.max(0, Math.round(value * 100) / 100);
 }

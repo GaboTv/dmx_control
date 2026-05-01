@@ -65,7 +65,8 @@ export const DMX_CHANNELS = [
     channel: 7,
     label: 'Function Choice',
     shortLabel: 'Mode',
-    description: 'Selects direct DMX control, color macros, chases, or sound-active mode.',
+    description:
+      'Selects direct DMX control, color macros, chases, or sound-active mode.',
   },
   {
     key: 'functionSpeed',
@@ -115,7 +116,8 @@ export const BLACKOUT_DMX_STATE: FixtureState = {
 };
 
 export const DEFAULT_SHOW_STATE: ShowState = createShowState(DEFAULT_DMX_STATE);
-export const BLACKOUT_SHOW_STATE: ShowState = createShowState(BLACKOUT_DMX_STATE);
+export const BLACKOUT_SHOW_STATE: ShowState =
+  createShowState(BLACKOUT_DMX_STATE);
 
 export const FUNCTION_MODES = [
   {
@@ -178,7 +180,14 @@ export interface DmxDeviceStatus {
   writes: number;
 }
 
+export interface DmxControlLock {
+  acquiredAt: string;
+  clientId: string;
+  label: string;
+}
+
 export interface DmxSnapshot {
+  controlLock?: DmxControlLock;
   device: DmxDeviceStatus;
   frame: number[];
   state: ShowState;
@@ -199,9 +208,13 @@ export function cloneFixtureState(state: FixtureState): FixtureState {
   return { ...state };
 }
 
-export function createShowState(seed: FixtureState = DEFAULT_DMX_STATE): ShowState {
+export function createShowState(
+  seed: FixtureState = DEFAULT_DMX_STATE,
+): ShowState {
   return {
-    fixtures: Array.from({ length: FIXTURE_COUNT }, () => cloneFixtureState(seed)),
+    fixtures: Array.from({ length: FIXTURE_COUNT }, () =>
+      cloneFixtureState(seed),
+    ),
   };
 }
 
@@ -241,18 +254,28 @@ export function normalizeShowPatch(input: unknown): ShowPatch {
   }
 
   const inputObject = input as Record<string, unknown>;
-  const fixtures: Array<FixturePatch | undefined> = Array.from({ length: FIXTURE_COUNT });
+  const fixtures: Array<FixturePatch | undefined> = Array.from({
+    length: FIXTURE_COUNT,
+  });
 
   if (Array.isArray(inputObject.fixtures)) {
-    inputObject.fixtures.slice(0, FIXTURE_COUNT).forEach((fixtureInput, index) => {
-      if (fixtureInput !== undefined && fixtureInput !== null) {
-        fixtures[index] = normalizeDmxPatch(fixtureInput);
-      }
-    });
+    inputObject.fixtures
+      .slice(0, FIXTURE_COUNT)
+      .forEach((fixtureInput, index) => {
+        if (fixtureInput !== undefined && fixtureInput !== null) {
+          fixtures[index] = normalizeDmxPatch(fixtureInput);
+        }
+      });
   } else if ('fixtureIndex' in inputObject && 'patch' in inputObject) {
     const fixtureIndex = Number(inputObject.fixtureIndex);
-    if (!Number.isInteger(fixtureIndex) || fixtureIndex < 0 || fixtureIndex >= FIXTURE_COUNT) {
-      throw new Error(`fixtureIndex must be between 0 and ${FIXTURE_COUNT - 1}.`);
+    if (
+      !Number.isInteger(fixtureIndex) ||
+      fixtureIndex < 0 ||
+      fixtureIndex >= FIXTURE_COUNT
+    ) {
+      throw new Error(
+        `fixtureIndex must be between 0 and ${FIXTURE_COUNT - 1}.`,
+      );
     }
     fixtures[fixtureIndex] = normalizeDmxPatch(inputObject.patch);
   } else if ('all' in inputObject) {
@@ -274,20 +297,31 @@ export function normalizeShowPatch(input: unknown): ShowPatch {
   return { fixtures };
 }
 
-export function mergeDmxState(current: FixtureState, patch: FixturePatch): FixtureState {
+export function mergeDmxState(
+  current: FixtureState,
+  patch: FixturePatch,
+): FixtureState {
   return {
     ...current,
     ...Object.fromEntries(
-      Object.entries(patch).map(([key, value]) => [key, clampDmxByte(value ?? 0)]),
+      Object.entries(patch).map(([key, value]) => [
+        key,
+        clampDmxByte(value ?? 0),
+      ]),
     ),
   } as FixtureState;
 }
 
-export function mergeShowState(current: ShowState, patch: ShowPatch): ShowState {
+export function mergeShowState(
+  current: ShowState,
+  patch: ShowPatch,
+): ShowState {
   return {
     fixtures: current.fixtures.map((fixture, index) => {
       const fixturePatch = patch.fixtures[index];
-      return fixturePatch ? mergeDmxState(fixture, fixturePatch) : cloneFixtureState(fixture);
+      return fixturePatch
+        ? mergeDmxState(fixture, fixturePatch)
+        : cloneFixtureState(fixture);
     }),
   };
 }
@@ -306,7 +340,10 @@ export function showStateToDmxFrame(state: ShowState): number[] {
 
 export function modeForValue(value: number) {
   const byte = clampDmxByte(value);
-  return FUNCTION_MODES.find((mode) => byte >= mode.min && byte <= mode.max) ?? FUNCTION_MODES[0];
+  return (
+    FUNCTION_MODES.find((mode) => byte >= mode.min && byte <= mode.max) ??
+    FUNCTION_MODES[0]
+  );
 }
 
 export function isDirectControlMode(value: number): boolean {

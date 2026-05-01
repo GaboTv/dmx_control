@@ -40,7 +40,9 @@ export class MockDmxOutput implements DmxOutput {
   private lastFrameAt?: string;
   private writes = 0;
 
-  constructor(private readonly detail = 'Mock DMX output active; no USB writes are being sent.') {}
+  constructor(
+    private readonly detail = 'Mock DMX output active; no USB writes are being sent.',
+  ) {}
 
   async close(): Promise<void> {
     return Promise.resolve();
@@ -75,7 +77,8 @@ export class UDmxOutput implements DmxOutput {
   private writeMode: 'multi' | 'single';
 
   private constructor(private readonly config: ServerConfig) {
-    this.writeMode = config.udmxWriteMode === 'auto' ? 'multi' : config.udmxWriteMode;
+    this.writeMode =
+      config.udmxWriteMode === 'auto' ? 'multi' : config.udmxWriteMode;
   }
 
   static async create(config: ServerConfig): Promise<UDmxOutput> {
@@ -113,7 +116,9 @@ export class UDmxOutput implements DmxOutput {
     } catch (error) {
       if (this.config.udmxWriteMode === 'auto' && this.writeMode === 'multi') {
         this.markWriteFailure(error, 'multi');
-        console.warn('[dmx] uDMX multi-channel write failed; retrying with single-channel writes.');
+        console.warn(
+          '[dmx] uDMX multi-channel write failed; retrying with single-channel writes.',
+        );
         this.writeMode = 'single';
         await this.closeAfterTransferError();
         await this.openDevice();
@@ -150,7 +155,10 @@ export class UDmxOutput implements DmxOutput {
     try {
       await this.close();
     } catch (closeError) {
-      console.warn('[dmx] uDMX close after transfer error failed:', errorMessage(closeError));
+      console.warn(
+        '[dmx] uDMX close after transfer error failed:',
+        errorMessage(closeError),
+      );
     }
   }
 
@@ -206,7 +214,10 @@ export class UDmxOutput implements DmxOutput {
       throw new Error('The installed usb package does not expose findByIds().');
     }
 
-    const device = findByIds(this.config.udmxVendorId, this.config.udmxProductId);
+    const device = findByIds(
+      this.config.udmxVendorId,
+      this.config.udmxProductId,
+    );
     if (!device) {
       throw new Error(
         `uDMX adapter not found at ${toHexId(this.config.udmxVendorId)}:${toHexId(
@@ -221,7 +232,10 @@ export class UDmxOutput implements DmxOutput {
     this.lastError = undefined;
   }
 
-  private async writeFrame(frame: number[], forceAllChannels = false): Promise<void> {
+  private async writeFrame(
+    frame: number[],
+    forceAllChannels = false,
+  ): Promise<void> {
     if (this.writeMode === 'single') {
       await this.writeSingleChannelFrame(frame, forceAllChannels);
       return;
@@ -232,21 +246,36 @@ export class UDmxOutput implements DmxOutput {
 
   private async writeMultiChannelFrame(frame: number[]): Promise<void> {
     const payload = Buffer.from(frame);
-    await this.controlTransfer(2, payload.length, this.config.udmxStartAddress, payload);
+    await this.controlTransfer(
+      2,
+      payload.length,
+      this.config.udmxStartAddress,
+      payload,
+    );
   }
 
-  private async writeSingleChannelFrame(frame: number[], forceAllChannels: boolean): Promise<void> {
+  private async writeSingleChannelFrame(
+    frame: number[],
+    forceAllChannels: boolean,
+  ): Promise<void> {
     for (const [offset, value] of frame.entries()) {
       if (!forceAllChannels && this.lastFrame?.[offset] === value) {
         continue;
       }
 
-      await this.controlTransfer(1, value, this.config.udmxStartAddress + offset, Buffer.alloc(1));
+      await this.controlTransfer(
+        1,
+        value,
+        this.config.udmxStartAddress + offset,
+        Buffer.alloc(1),
+      );
     }
   }
 }
 
-export async function createDmxOutput(config: ServerConfig): Promise<DmxOutput> {
+export async function createDmxOutput(
+  config: ServerConfig,
+): Promise<DmxOutput> {
   if (config.dmxDriver === 'mock') {
     return new MockDmxOutput('DMX_DRIVER=mock; hardware writes are disabled.');
   }
@@ -258,7 +287,9 @@ export async function createDmxOutput(config: ServerConfig): Promise<DmxOutput> 
       throw error;
     }
 
-    return new MockDmxOutput(`uDMX unavailable, running in mock mode: ${errorMessage(error)}`);
+    return new MockDmxOutput(
+      `uDMX unavailable, running in mock mode: ${errorMessage(error)}`,
+    );
   }
 }
 

@@ -41,7 +41,9 @@ describe('DMX model', () => {
   });
 
   it('keeps default fixture state objects independent', () => {
-    expect(DEFAULT_SHOW_STATE.fixtures[0]).not.toBe(DEFAULT_SHOW_STATE.fixtures[1]);
+    expect(DEFAULT_SHOW_STATE.fixtures[0]).not.toBe(
+      DEFAULT_SHOW_STATE.fixtures[1],
+    );
   });
 
   it('clamps DMX values to one byte', () => {
@@ -51,11 +53,15 @@ describe('DMX model', () => {
   });
 
   it('rejects unknown channel keys', () => {
-    expect(() => normalizeDmxPatch({ pan: 100 })).toThrow('Unknown DMX channel key');
+    expect(() => normalizeDmxPatch({ pan: 100 })).toThrow(
+      'Unknown DMX channel key',
+    );
   });
 
   it('normalizes fixture-specific patches', () => {
-    expect(normalizeShowPatch({ fixtures: [{ red: 255 }, { blue: 255 }] })).toEqual({
+    expect(
+      normalizeShowPatch({ fixtures: [{ red: 255 }, { blue: 255 }] }),
+    ).toEqual({
       fixtures: [{ red: 255 }, { blue: 255 }],
     });
   });
