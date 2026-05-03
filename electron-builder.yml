@@ -1,0 +1,33 @@
+appId: com.retono.dmxlightcontrol
+productName: DMX Light Control
+directories:
+  output: release
+files:
+  - dist/**/*
+  - package.json
+asar: true
+asarUnpack:
+  - node_modules/usb/**/*
+extraMetadata:
+  main: dist/server/electron/main.js
+win:
+  signAndEditExecutable: false
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+mac:
+  category: public.app-category.utilities
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  artifactName: ${productName}-${version}-${arch}.${ext}

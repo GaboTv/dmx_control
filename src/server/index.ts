@@ -183,9 +183,8 @@ app.use(
     _next: NextFunction,
   ) => {
     void _next;
-    const message =
-      error instanceof Error ? error.message : 'Unexpected server error.';
-    response.status(400).json({ error: message });
+    const { message, status } = httpErrorResponse(error);
+    response.status(status).json({ error: message });
   },
 );
 
@@ -265,6 +264,39 @@ function clientIdFromSocketRequest(
 
 function currentSnapshot(): DmxSnapshot {
   return withControlLock(controller.snapshot());
+}
+
+function httpErrorResponse(error: unknown): {
+  message: string;
+  status: number;
+} {
+  const message =
+    error instanceof Error ? error.message : 'Unexpected server error.';
+
+  if (message.includes('locked by')) {
+    return { message, status: 409 };
+  }
+
+  if (message.includes('Acquire DMX control')) {
+    return { message, status: 403 };
+  }
+
+  if (
+    message.includes('browser client ID') ||
+    message.includes('DMX update') ||
+    message.includes('DMX value') ||
+    message.includes('Unknown DMX channel key') ||
+    message.includes('fixtureIndex')
+  ) {
+    return { message, status: 400 };
+  }
+
+  if (message.includes('uDMX') || message.includes('usb')) {
+    return { message, status: 503 };
+  }
+
+  console.error('[server] Unhandled request error:', error);
+  return { message: 'Unexpected server error.', status: 500 };
 }
 
 function hasConnectedSocket(clientId: string): boolean {

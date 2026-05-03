@@ -1479,7 +1479,10 @@ h2 {
     animation-iteration-count: 1 !important;
   }
 
-  button:hover:not(:disabled),
+  button:hover:not(:disabled) {
+    transform: none;
+  }
+
   .timelineCue:hover:not(:disabled) {
     transform: translate(-50%, -50%);
   }

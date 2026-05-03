@@ -52,6 +52,35 @@ npm run dev
 
 Open `http://localhost:5173`. The Vite dev server proxies `/api` and `/ws` to the backend on `http://127.0.0.1:4174`.
 
+## Desktop App For End Users
+
+End users should not need Node.js, npm, or a terminal. Build and publish the Electron installers instead:
+
+- Windows: `DMX Light Control-Setup-<version>.exe`
+- macOS: `DMX Light Control-<version>-<arch>.dmg`
+
+User flow:
+
+1. Download the installer from the GitHub release.
+2. Install the app.
+3. Plug in the uDMX adapter.
+4. Open `DMX Light Control` from the desktop/start menu/applications folder.
+5. Click `Take Control` before sending DMX commands.
+
+The desktop app bundles the API server and browser UI. It still defaults to `DMX_DRIVER=auto`, so it uses uDMX when available and mock mode when the adapter is missing.
+
+## Desktop Build Commands
+
+```bash
+npm run electron:dev       # current dev server + Electron shell
+npm run electron:build:dir # unpacked local test build in release/win-unpacked
+npm run electron:build     # installer build for the current OS
+```
+
+Build Windows installers on Windows and macOS DMGs on macOS. Native USB dependencies are rebuilt for the target Electron runtime during packaging.
+
+Unsigned first releases may trigger Windows SmartScreen or macOS Gatekeeper warnings. For public distribution, add code signing later.
+
 ## Hardware Mode
 
 `DMX_DRIVER=auto` tries the uDMX adapter first and falls back to mock mode if hardware is unavailable. Use `DMX_DRIVER=udmx` when the app should fail startup unless the adapter is connected.
@@ -81,6 +110,7 @@ npm test
 npm run test:soak # mock DMX long-run soak, defaults to 5 hours
 npm run build
 npm start          # serves dist/client from the API server
+npm run electron:build
 ```
 
 ## Reliability Tests

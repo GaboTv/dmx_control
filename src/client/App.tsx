@@ -43,6 +43,9 @@ import { TheaterViewer } from './TheaterViewer';
 
 type ConnectionState = 'connected' | 'connecting' | 'offline';
 type ActivePage = 'control' | 'home' | 'music';
+type StatusSocketPayload =
+  | { snapshot: DmxSnapshot; type: 'snapshot' }
+  | { error: string; type: 'error' };
 
 const CLIENT_ID_STORAGE_KEY = 'dmx-control-client-id';
 const SCENE_DIMMING_INTERVAL_SECONDS = 0.05;
@@ -201,16 +204,24 @@ function createClientLabel(clientId: string): string {
 }
 
 function getOrCreateClientId(): string {
-  const existing = window.localStorage.getItem(CLIENT_ID_STORAGE_KEY);
-  if (existing) {
-    return existing;
+  try {
+    const existing = window.localStorage.getItem(CLIENT_ID_STORAGE_KEY);
+    if (existing) {
+      return existing;
+    }
+  } catch {
+    // Storage can be unavailable in private modes or locked-down browsers.
   }
 
   const nextId =
     typeof window.crypto.randomUUID === 'function'
       ? window.crypto.randomUUID()
       : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-  window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, nextId);
+  try {
+    window.localStorage.setItem(CLIENT_ID_STORAGE_KEY, nextId);
+  } catch {
+    // Keep ephemeral ID for this page session if persistence fails.
+  }
   return nextId;
 }
 
@@ -1844,9 +1855,13 @@ function openStatusSocket(
   });
 
   socket.addEventListener('message', (event) => {
-    const payload = JSON.parse(event.data as string) as
-      | { snapshot: DmxSnapshot; type: 'snapshot' }
-      | { error: string; type: 'error' };
+    let payload: StatusSocketPayload;
+    try {
+      payload = parseStatusSocketPayload(event.data);
+    } catch {
+      setError('Invalid live update from the DMX backend.');
+      return;
+    }
 
     if (payload.type === 'snapshot') {
       onSnapshot(payload.snapshot);
@@ -1868,6 +1883,28 @@ function openStatusSocket(
   });
 
   return socket;
+}
+
+function parseStatusSocketPayload(data: unknown): StatusSocketPayload {
+  if (typeof data !== 'string') {
+    throw new Error('WebSocket message must be text.');
+  }
+
+  const parsed = JSON.parse(data) as unknown;
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('WebSocket message must be an object.');
+  }
+
+  const payload = parsed as Record<string, unknown>;
+  if (payload.type === 'snapshot' && payload.snapshot) {
+    return payload as { snapshot: DmxSnapshot; type: 'snapshot' };
+  }
+
+  if (payload.type === 'error' && typeof payload.error === 'string') {
+    return { error: payload.error, type: 'error' };
+  }
+
+  throw new Error('Unknown WebSocket message type.');
 }
 
 async function generateSceneFromAudio(
@@ -1960,7 +1997,14 @@ function readAudioDuration(file: File): Promise<number | undefined> {
   return new Promise((resolve) => {
     const audio = document.createElement('audio');
     const url = URL.createObjectURL(file);
+    const timeout = window.setTimeout(() => {
+      cleanup();
+      resolve(undefined);
+    }, 6_000);
     const cleanup = () => {
+      window.clearTimeout(timeout);
+      audio.onloadedmetadata = null;
+      audio.onerror = null;
       audio.removeAttribute('src');
       URL.revokeObjectURL(url);
     };

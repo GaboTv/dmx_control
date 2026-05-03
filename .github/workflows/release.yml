@@ -1,0 +1,41 @@
+name: Release Desktop App
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  desktop:
+    name: Build ${{ matrix.os }} installer
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run electron:build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dmx-light-control-${{ matrix.os }}
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.blockmap
+          if-no-files-found: error
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            release/*.exe
+            release/*.dmg
+            release/*.blockmap
