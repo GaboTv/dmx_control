@@ -22,13 +22,29 @@ import { DmxController } from './dmxController';
 
 class TestDmxOutput implements DmxOutput {
   closeCalls = 0;
+  connected = true;
+  disconnectOnHealthCheck = false;
   failNext = false;
   frames: number[][] = [];
   inFlight = 0;
   maxInFlight = 0;
+  sendDelay?: Promise<void>;
+
+  constructor(private readonly driver: DmxDeviceStatus['driver'] = 'mock') {}
 
   async close(): Promise<void> {
     this.closeCalls += 1;
+    this.connected = false;
+  }
+
+  async checkHealth(): Promise<boolean> {
+    if (this.disconnectOnHealthCheck) {
+      this.connected = false;
+      this.disconnectOnHealthCheck = false;
+      return true;
+    }
+
+    return false;
   }
 
   async sendFrame(frame: number[]): Promise<void> {
@@ -36,7 +52,7 @@ class TestDmxOutput implements DmxOutput {
     this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
 
     try {
-      await Promise.resolve();
+      await (this.sendDelay ?? Promise.resolve());
       if (this.failNext) {
         this.failNext = false;
         throw new Error('simulated DMX write failure');
@@ -49,9 +65,9 @@ class TestDmxOutput implements DmxOutput {
 
   status(): DmxDeviceStatus {
     return {
-      connected: true,
+      connected: this.connected,
       detail: 'test output',
-      driver: 'mock',
+      driver: this.driver,
       writes: this.frames.length,
     };
   }
@@ -159,6 +175,84 @@ describe('DmxController reliability', () => {
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(output.frames).toHaveLength(writesAfterClose);
   });
+
+  it('auto-detects uDMX after starting in mock mode', async () => {
+    vi.useFakeTimers();
+    const mockOutput = new TestDmxOutput('mock');
+    const udmxOutput = new TestDmxOutput('udmx');
+    mockState.outputs.push(mockOutput, udmxOutput);
+    const controller = await DmxController.create(
+      testConfig({ dmxDriver: 'auto', udmxAutoReconnectMs: 1000 }),
+    );
+    mockOutput.frames = [];
+    udmxOutput.frames = [];
+
+    expect(controller.snapshot().device.driver).toBe('mock');
+    expect(controller.snapshot().device.autoReconnectActive).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(mockOutput.closeCalls).toBe(1);
+    expect(controller.snapshot().device.driver).toBe('udmx');
+    expect(controller.snapshot().device.autoReconnectActive).toBe(false);
+    expect(udmxOutput.frames).toHaveLength(1);
+    await controller.close();
+  });
+
+  it('detects a disconnected uDMX adapter during auto maintenance', async () => {
+    vi.useFakeTimers();
+    const udmxOutput = new TestDmxOutput('udmx');
+    const mockOutput = new TestDmxOutput('mock');
+    mockState.outputs.push(udmxOutput, mockOutput);
+    const controller = await DmxController.create(
+      testConfig({ dmxDriver: 'auto', udmxAutoReconnectMs: 1000 }),
+    );
+    udmxOutput.frames = [];
+    mockOutput.frames = [];
+    udmxOutput.disconnectOnHealthCheck = true;
+
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(udmxOutput.closeCalls).toBe(1);
+    expect(controller.snapshot().device.driver).toBe('mock');
+    expect(controller.snapshot().device.autoReconnectActive).toBe(true);
+    expect(mockOutput.frames).toHaveLength(1);
+    await controller.close();
+  });
+
+  it('waits for in-flight writes before reconnecting', async () => {
+    const output = new TestDmxOutput('udmx');
+    const controller = await createController(output, { dmxDriver: 'udmx' });
+    let releaseWrite = () => undefined;
+    output.frames = [];
+    output.sendDelay = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+
+    const update = controller.update(
+      { fixtures: [{ red: 100 }] },
+      { immediate: true },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(output.inFlight).toBe(1);
+
+    const nextOutput = new TestDmxOutput('udmx');
+    mockState.outputs.push(nextOutput);
+    const reconnect = controller.reconnect();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(output.closeCalls).toBe(0);
+
+    releaseWrite();
+    await update;
+    await reconnect;
+
+    expect(output.closeCalls).toBe(1);
+    expect(controller.snapshot().device.driver).toBe('udmx');
+    expect(nextOutput.frames).toHaveLength(1);
+    await controller.close();
+  });
 });
 
 async function createController(
@@ -178,6 +272,7 @@ function testConfig(overrides: Partial<ServerConfig> = {}): ServerConfig {
     port: 4174,
     staticDir: 'dist/client',
     udmxProductId: 0x05dc,
+    udmxAutoReconnectMs: 5000,
     udmxRefreshMs: 0,
     udmxStartAddress: 0,
     udmxVendorId: 0x16c0,

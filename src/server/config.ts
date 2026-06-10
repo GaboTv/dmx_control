@@ -57,6 +57,7 @@ export const serverConfig = {
   staticDir:
     process.env.STATIC_DIR ?? path.join(process.cwd(), 'dist', 'client'),
   udmxProductId: envUsbId('UDMX_PRODUCT_ID', 0x05dc),
+  udmxAutoReconnectMs: envInt('UDMX_AUTO_RECONNECT_MS', 5000),
   udmxRefreshMs: envInt('UDMX_REFRESH_MS', 0),
   udmxStartAddress: envInt('UDMX_START_ADDRESS', 0),
   udmxVendorId: envUsbId('UDMX_VENDOR_ID', 0x16c0),

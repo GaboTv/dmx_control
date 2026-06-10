@@ -17,8 +17,10 @@ type SnapshotListener = (snapshot: DmxSnapshot) => void;
 
 export class DmxController {
   private readonly events = new EventEmitter();
+  private autoReconnectTimer?: NodeJS.Timeout;
   private flushTimer?: NodeJS.Timeout;
   private refreshTimer?: NodeJS.Timeout;
+  private reconnectInFlight?: Promise<DmxSnapshot>;
   private state: ShowState = DEFAULT_SHOW_STATE;
   private updatedAt = new Date().toISOString();
   private writeChain: Promise<void> = Promise.resolve();
@@ -31,6 +33,12 @@ export class DmxController {
       this.refreshTimer = setInterval(() => {
         void this.flushNow().finally(() => this.emitSnapshot());
       }, config.udmxRefreshMs);
+    }
+
+    if (this.autoReconnectEnabled()) {
+      this.autoReconnectTimer = setInterval(() => {
+        void this.maintainAutoConnection();
+      }, config.udmxAutoReconnectMs);
     }
   }
 
@@ -58,6 +66,14 @@ export class DmxController {
       clearInterval(this.refreshTimer);
     }
 
+    if (this.autoReconnectTimer) {
+      clearInterval(this.autoReconnectTimer);
+    }
+
+    if (this.reconnectInFlight) {
+      await this.reconnectInFlight.catch(() => undefined);
+    }
+
     await this.output.close();
   }
 
@@ -67,12 +83,56 @@ export class DmxController {
   }
 
   async reconnect(): Promise<DmxSnapshot> {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
+    return this.reconnectOutput('manual');
+  }
+
+  private async reconnectOutput(
+    reason: 'auto' | 'manual',
+  ): Promise<DmxSnapshot> {
+    if (this.reconnectInFlight) {
+      return this.reconnectInFlight;
     }
 
-    await this.output.close();
-    this.output = await createDmxOutput(this.config);
+    this.reconnectInFlight = this.doReconnect(reason).finally(() => {
+      this.reconnectInFlight = undefined;
+    });
+
+    return this.reconnectInFlight;
+  }
+
+  private async doReconnect(reason: 'auto' | 'manual'): Promise<DmxSnapshot> {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+
+    await this.writeChain.catch(() => undefined);
+
+    const currentStatus = this.output.status();
+    if (
+      reason === 'auto' &&
+      currentStatus.driver !== 'mock' &&
+      currentStatus.connected
+    ) {
+      return this.snapshot();
+    }
+
+    if (currentStatus.driver === 'mock') {
+      const nextOutput = await createDmxOutput(this.config);
+      const nextStatus = nextOutput.status();
+
+      if (reason === 'auto' && nextStatus.driver === 'mock') {
+        await nextOutput.close();
+        return this.snapshot();
+      }
+
+      await this.output.close();
+      this.output = nextOutput;
+    } else {
+      await this.output.close();
+      this.output = await createDmxOutput(this.config);
+    }
+
     await this.flushNow();
     this.emitSnapshot();
     return this.snapshot();
@@ -80,10 +140,55 @@ export class DmxController {
 
   snapshot(): DmxSnapshot {
     return {
-      device: this.output.status(),
+      device: this.deviceStatus(),
       frame: showStateToDmxFrame(this.state),
       state: this.state,
       updatedAt: this.updatedAt,
+    };
+  }
+
+  private autoReconnectEnabled(): boolean {
+    return (
+      this.config.dmxDriver === 'auto' && this.config.udmxAutoReconnectMs > 0
+    );
+  }
+
+  private async maintainAutoConnection(): Promise<void> {
+    if (!this.autoReconnectEnabled()) {
+      return;
+    }
+
+    try {
+      const healthChanged = (await this.output.checkHealth?.()) ?? false;
+      const status = this.output.status();
+
+      if (status.driver === 'mock' || !status.connected) {
+        await this.reconnectOutput('auto');
+        return;
+      }
+
+      if (healthChanged) {
+        this.emitSnapshot();
+      }
+    } catch (error) {
+      console.warn(
+        '[dmx] Automatic uDMX connection check failed:',
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private deviceStatus(): DmxSnapshot['device'] {
+    const status = this.output.status();
+    const autoReconnectActive =
+      this.autoReconnectEnabled() && status.driver === 'mock';
+
+    return {
+      ...status,
+      autoReconnectActive,
+      autoReconnectMs: autoReconnectActive
+        ? this.config.udmxAutoReconnectMs
+        : undefined,
     };
   }
 

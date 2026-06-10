@@ -2,6 +2,7 @@ import { clampDmxByte, type DmxDeviceStatus } from '../shared/dmx.js';
 import { type ServerConfig } from './config.js';
 
 export interface DmxOutput {
+  checkHealth?(): Promise<boolean>;
   close(): Promise<void>;
   sendFrame(frame: number[]): Promise<void>;
   status(): DmxDeviceStatus;
@@ -107,6 +108,42 @@ export class UDmxOutput implements DmxOutput {
     }
   }
 
+  async checkHealth(): Promise<boolean> {
+    if (!this.connected) {
+      return false;
+    }
+
+    try {
+      const usb = await loadUsbApi();
+      const findByIds = usb.findByIds ?? usb.usb?.findByIds;
+
+      if (!findByIds) {
+        return this.markDeviceDisconnected(
+          'The installed usb package does not expose findByIds().',
+        );
+      }
+
+      const device = findByIds(
+        this.config.udmxVendorId,
+        this.config.udmxProductId,
+      );
+
+      if (!device) {
+        return this.markDeviceDisconnected(
+          `uDMX adapter disconnected from ${toHexId(this.config.udmxVendorId)}:${toHexId(
+            this.config.udmxProductId,
+          )}.`,
+        );
+      }
+
+      return false;
+    } catch (error) {
+      return this.markDeviceDisconnected(
+        `uDMX health check failed: ${errorMessage(error)}`,
+      );
+    }
+  }
+
   async sendFrame(frame: number[]): Promise<void> {
     if (!this.device) {
       await this.openDevice();
@@ -202,6 +239,25 @@ export class UDmxOutput implements DmxOutput {
       startAddress: this.config.udmxStartAddress,
       vendorId: toHexId(this.config.udmxVendorId),
     });
+  }
+
+  private markDeviceDisconnected(message: string): boolean {
+    const changed = this.connected || this.lastError !== message;
+    this.connected = false;
+    this.lastError = message;
+    this.lastErrorAt = new Date().toISOString();
+
+    if (this.device) {
+      try {
+        this.device.close();
+      } catch (error) {
+        this.lastError = `${message} Close failed: ${errorMessage(error)}`;
+      } finally {
+        this.device = undefined;
+      }
+    }
+
+    return changed;
   }
 
   private markWriteSuccess(frame: number[]): void {

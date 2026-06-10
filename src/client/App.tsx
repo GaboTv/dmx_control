@@ -1,6 +1,7 @@
 import {
   type CSSProperties,
   type ChangeEvent,
+  type SyntheticEvent,
   useEffect,
   useRef,
   useState,
@@ -18,6 +19,7 @@ import {
   type ShowState,
   isDirectControlMode,
   modeForValue,
+  normalizeDmxPatch,
   showStateToDmxFrame,
 } from '../shared/dmx';
 import {
@@ -31,8 +33,10 @@ import {
   findNextCueIndex,
   fixtureToPatch,
   formatTime,
-  generateFolkloricSceneFromEnergyFrames,
   type EnergyFrame,
+  SCENE_GENERATION_METHODS,
+  type SceneGenerationMethod,
+  generateSignalSceneFromEnergyFrames,
   normalizeFixturePatches,
   normalizeImportedScene,
   normalizePatchLoose,
@@ -42,12 +46,13 @@ import {
 import { TheaterViewer } from './TheaterViewer';
 
 type ConnectionState = 'connected' | 'connecting' | 'offline';
-type ActivePage = 'control' | 'home' | 'music';
+type ActivePage = 'control' | 'home' | 'music' | 'player';
 type StatusSocketPayload =
   | { snapshot: DmxSnapshot; type: 'snapshot' }
   | { error: string; type: 'error' };
 
 const CLIENT_ID_STORAGE_KEY = 'dmx-control-client-id';
+const PLAYER_SLOT_COUNT = 20;
 const SCENE_DIMMING_INTERVAL_SECONDS = 0.05;
 const SCENE_DIMMING_KEYS: Array<keyof FixtureState> = [
   'master',
@@ -63,9 +68,22 @@ interface UploadedSong {
   url: string;
 }
 
+interface PlayerSlot {
+  scene?: TrackScene;
+  song?: UploadedSong;
+  songFile?: File;
+}
+
 interface GeneratedSceneResult {
   scene: TrackScene;
   warning?: string;
+}
+
+interface DirectColorOption {
+  label: string;
+  patch: Required<
+    Pick<FixtureState, 'blue' | 'green' | 'master' | 'red' | 'white'>
+  >;
 }
 
 const PRESETS: Array<{ fixtures: FixturePatches; label: string }> = [
@@ -193,6 +211,93 @@ const PRESETS: Array<{ fixtures: FixturePatches; label: string }> = [
   },
 ];
 
+const DIRECT_COLORS: DirectColorOption[] = [
+  {
+    label: 'Red',
+    patch: { blue: 0, green: 0, master: 255, red: 255, white: 0 },
+  },
+  {
+    label: 'Orange',
+    patch: { blue: 0, green: 90, master: 255, red: 255, white: 0 },
+  },
+  {
+    label: 'Amber',
+    patch: { blue: 0, green: 145, master: 255, red: 255, white: 18 },
+  },
+  {
+    label: 'Green',
+    patch: { blue: 0, green: 255, master: 255, red: 0, white: 0 },
+  },
+  {
+    label: 'Lime',
+    patch: { blue: 0, green: 255, master: 255, red: 115, white: 0 },
+  },
+  {
+    label: 'Blue',
+    patch: { blue: 255, green: 0, master: 255, red: 0, white: 0 },
+  },
+  {
+    label: 'Deep Blue',
+    patch: { blue: 255, green: 0, master: 230, red: 20, white: 0 },
+  },
+  {
+    label: 'Sky',
+    patch: { blue: 255, green: 130, master: 245, red: 0, white: 12 },
+  },
+  {
+    label: 'Yellow',
+    patch: { blue: 0, green: 210, master: 255, red: 255, white: 0 },
+  },
+  {
+    label: 'Cyan',
+    patch: { blue: 255, green: 210, master: 255, red: 0, white: 0 },
+  },
+  {
+    label: 'Turquoise',
+    patch: { blue: 190, green: 255, master: 245, red: 0, white: 20 },
+  },
+  {
+    label: 'Magenta',
+    patch: { blue: 230, green: 0, master: 255, red: 255, white: 0 },
+  },
+  {
+    label: 'Purple',
+    patch: { blue: 255, green: 0, master: 245, red: 120, white: 0 },
+  },
+  {
+    label: 'Pink',
+    patch: { blue: 120, green: 20, master: 255, red: 255, white: 35 },
+  },
+  {
+    label: 'White',
+    patch: { blue: 0, green: 0, master: 255, red: 0, white: 255 },
+  },
+  {
+    label: 'Soft White',
+    patch: { blue: 30, green: 60, master: 220, red: 80, white: 190 },
+  },
+  {
+    label: 'Warm',
+    patch: { blue: 25, green: 120, master: 230, red: 255, white: 120 },
+  },
+  {
+    label: 'Candle',
+    patch: { blue: 0, green: 75, master: 190, red: 255, white: 80 },
+  },
+  {
+    label: 'Rose Gold',
+    patch: { blue: 60, green: 85, master: 220, red: 255, white: 95 },
+  },
+  {
+    label: 'Ice',
+    patch: { blue: 255, green: 155, master: 230, red: 30, white: 140 },
+  },
+  {
+    label: 'Blackout',
+    patch: { blue: 0, green: 0, master: 0, red: 0, white: 0 },
+  },
+];
+
 function createInitialShowState(): ShowState {
   return {
     fixtures: DEFAULT_SHOW_STATE.fixtures.map((fixture) => ({ ...fixture })),
@@ -201,6 +306,10 @@ function createInitialShowState(): ShowState {
 
 function createClientLabel(clientId: string): string {
   return `Browser ${clientId.slice(-4).toUpperCase()}`;
+}
+
+function createPlayerSlots(): PlayerSlot[] {
+  return Array.from({ length: PLAYER_SLOT_COUNT }, () => ({}));
 }
 
 function getOrCreateClientId(): string {
@@ -233,9 +342,15 @@ export function App() {
   const [error, setError] = useState<string>();
   const [isProcessing, setIsProcessing] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const [playerSlots, setPlayerSlots] =
+    useState<PlayerSlot[]>(createPlayerSlots);
   const [processingProgress, setProcessingProgress] = useState<number>();
+  const [sceneGenerationMethod, setSceneGenerationMethod] =
+    useState<SceneGenerationMethod>('section-phrases');
   const [scene, setScene] = useState<TrackScene>(() => createEmptyScene());
   const [sceneMessage, setSceneMessage] = useState<string>();
+  const [selectedPlayerSlot, setSelectedPlayerSlot] = useState(0);
   const [snapshot, setSnapshot] = useState<DmxSnapshot>(() => {
     const state = createInitialShowState();
     return {
@@ -262,6 +377,7 @@ export function App() {
   const sceneRef = useRef(scene);
   const sceneTimer = useRef<number>();
   const socketRef = useRef<WebSocket>();
+  const playerSongUrls = useRef<Array<string | undefined>>([]);
   const songUrlRef = useRef<string>();
 
   const clientLabel = createClientLabel(clientId);
@@ -322,6 +438,11 @@ export function App() {
       if (songUrlRef.current) {
         URL.revokeObjectURL(songUrlRef.current);
       }
+      for (const url of playerSongUrls.current) {
+        if (url) {
+          URL.revokeObjectURL(url);
+        }
+      }
     };
   }, [clientId]);
 
@@ -333,9 +454,12 @@ export function App() {
   const cueCount = scene.cues.length;
   const currentCue = scene.cues.find((cue) => cue.id === activeCueId);
   const controlLock = snapshot.controlLock;
+  const currentPlayerSlot = playerSlots[selectedPlayerSlot];
+  const cueDebugJson = currentCue ? JSON.stringify(currentCue, null, 2) : '';
   const ownsControlLock = controlLock?.clientId === clientId;
   const canSendHardwareCommands = !controlLock || ownsControlLock;
   const hardwareControlReady = ownsControlLock;
+  const canReconnectHardware = !controlLock || ownsControlLock;
 
   function queueFixturePatch(fixtureIndex: number, patch: DmxPatch) {
     const fixtures: Array<DmxPatch | undefined> = Array.from({
@@ -343,6 +467,12 @@ export function App() {
     });
     fixtures[fixtureIndex] = patch;
     void queueFixturePatches(fixtures);
+  }
+
+  function queueActiveFixturePatch(patch: DmxPatch) {
+    void queueFixturePatches(
+      Array.from({ length: scene.fixtureCount }, () => patch),
+    );
   }
 
   async function queueFixturePatches(
@@ -454,7 +584,7 @@ export function App() {
         method: 'POST',
       });
       if (!response.ok) {
-        throw new Error(await response.text());
+        throw new Error(await responseErrorMessage(response));
       }
       const nextSnapshot = (await response.json()) as DmxSnapshot;
       setSnapshot(nextSnapshot);
@@ -468,6 +598,19 @@ export function App() {
       );
       return undefined;
     }
+  }
+
+  async function responseErrorMessage(response: Response): Promise<string> {
+    try {
+      const payload = (await response.json()) as { error?: unknown };
+      if (typeof payload.error === 'string') {
+        return payload.error;
+      }
+    } catch {
+      // Fall back to status text below if the backend did not return JSON.
+    }
+
+    return response.statusText || `Request failed with ${response.status}.`;
   }
 
   async function acquireControlLock(): Promise<boolean> {
@@ -510,20 +653,32 @@ export function App() {
     await postJson('/api/control-lock/release', { clientId });
   }
 
-  async function sendSocketAction(type: 'blackout' | 'reconnect') {
-    if (!(await ensureControlLock())) {
+  async function reconnectDmxDevice(): Promise<void> {
+    if (isReconnecting) {
       return;
     }
 
-    const socket = socketRef.current;
-    if (socket?.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ clientId, type }));
+    if (!ownsControlLock && !(await acquireControlLock())) {
       return;
     }
 
-    const path =
-      type === 'blackout' ? '/api/blackout' : '/api/device/reconnect';
-    void postJson(path);
+    setIsReconnecting(true);
+    setSceneMessage('Scanning for uDMX adapter...');
+
+    try {
+      const nextSnapshot = await postJson('/api/device/reconnect');
+      if (!nextSnapshot) {
+        return;
+      }
+
+      const message =
+        nextSnapshot.device.driver === 'udmx' && nextSnapshot.device.connected
+          ? 'uDMX connected and receiving frames.'
+          : 'uDMX not found yet. Running in mock mode and continuing to auto-scan.';
+      setSceneMessage(message);
+    } finally {
+      setIsReconnecting(false);
+    }
   }
 
   function handleSongUpload(event: ChangeEvent<HTMLInputElement>) {
@@ -594,13 +749,18 @@ export function App() {
 
     setIsProcessing(true);
     setProcessingProgress(0);
+    const methodLabel =
+      SCENE_GENERATION_METHODS.find(
+        (method) => method.id === sceneGenerationMethod,
+      )?.label ?? 'selected method';
     setSceneMessage(
-      `Analyzing folkloric rhythm and building ${scene.fixtureCount}-light cues...`,
+      `Analyzing ${methodLabel.toLowerCase()} and building ${scene.fixtureCount}-light cues...`,
     );
     try {
       const generated = await generateSceneFromAudio(
         songFile,
         scene.fixtureCount,
+        sceneGenerationMethod,
         setProcessingProgress,
         song?.duration ?? scene.duration,
       );
@@ -609,7 +769,7 @@ export function App() {
       setActiveCueId(undefined);
       setSceneMessage(
         generated.warning ??
-          `Generated ${generated.scene.cues.length} cues for ${generated.scene.fixtureCount} ${generated.scene.fixtureCount === 1 ? 'light' : 'lights'}.`,
+          `Generated ${generated.scene.cues.length} ${methodLabel.toLowerCase()} cues for ${generated.scene.fixtureCount} ${generated.scene.fixtureCount === 1 ? 'light' : 'lights'}.`,
       );
     } catch (processError) {
       setSceneMessage(
@@ -645,6 +805,98 @@ export function App() {
     } finally {
       event.target.value = '';
     }
+  }
+
+  function handlePlayerSongUpload(
+    slotIndex: number,
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    if (playerSongUrls.current[slotIndex]) {
+      URL.revokeObjectURL(playerSongUrls.current[slotIndex]);
+    }
+
+    const url = URL.createObjectURL(file);
+    const nextSong = { name: file.name, url };
+    const slotScene = playerSlots[slotIndex]?.scene;
+    playerSongUrls.current[slotIndex] = url;
+    setPlayerSlots((current) =>
+      current.map((slot, index) =>
+        index === slotIndex
+          ? { ...slot, song: nextSong, songFile: file }
+          : slot,
+      ),
+    );
+    setSelectedPlayerSlot(slotIndex);
+    setSong(nextSong);
+    setSongFile(file);
+    setScene(slotScene ?? createEmptyScene(scene.fixtureCount, file.name, 0));
+    setActiveCueId(undefined);
+    nextCueIndexRef.current = 0;
+    setSceneMessage(`Loaded ${file.name} into player row ${slotIndex + 1}.`);
+    event.target.value = '';
+  }
+
+  async function handlePlayerSceneUpload(
+    slotIndex: number,
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const imported = normalizeImportedScene(JSON.parse(await file.text()));
+      setPlayerSlots((current) =>
+        current.map((slot, index) =>
+          index === slotIndex ? { ...slot, scene: imported } : slot,
+        ),
+      );
+      setSelectedPlayerSlot(slotIndex);
+      setScene(imported);
+      if (playerSlots[slotIndex]?.song) {
+        setSong(playerSlots[slotIndex].song);
+        setSongFile(playerSlots[slotIndex].songFile);
+      }
+      setActiveCueId(undefined);
+      nextCueIndexRef.current = 0;
+      setSceneMessage(
+        `Loaded ${imported.name} into player row ${slotIndex + 1}.`,
+      );
+    } catch (importError) {
+      setSceneMessage(
+        importError instanceof Error
+          ? importError.message
+          : 'Could not import scene JSON.',
+      );
+    } finally {
+      event.target.value = '';
+    }
+  }
+
+  function loadPlayerSlot(slotIndex: number) {
+    const slot = playerSlots[slotIndex];
+    if (!slot.song && !slot.scene) {
+      setSceneMessage(`Player row ${slotIndex + 1} is empty.`);
+      return;
+    }
+
+    setSelectedPlayerSlot(slotIndex);
+    if (slot.song) {
+      setSong(slot.song);
+      setSongFile(slot.songFile);
+    }
+    if (slot.scene) {
+      setScene(slot.scene);
+    }
+    setActiveCueId(undefined);
+    nextCueIndexRef.current = 0;
+    setSceneMessage(`Loaded player row ${slotIndex + 1}.`);
   }
 
   function exportScene() {
@@ -720,6 +972,33 @@ export function App() {
       sceneRef.current.cues,
     );
     await audioRef.current.play();
+  }
+
+  function handleAudioLoadedMetadata(event: SyntheticEvent<HTMLAudioElement>) {
+    const duration = roundTime(event.currentTarget.duration);
+    setSong((current) => (current ? { ...current, duration } : current));
+    setScene((current) => ({ ...current, duration }));
+
+    if (activePage === 'player') {
+      setPlayerSlots((current) =>
+        current.map((slot, index) => {
+          if (index !== selectedPlayerSlot) {
+            return slot;
+          }
+
+          return {
+            ...slot,
+            scene: slot.scene ? { ...slot.scene, duration } : slot.scene,
+            song: slot.song ? { ...slot.song, duration } : slot.song,
+          };
+        }),
+      );
+    }
+  }
+
+  function handleAudioSeeked() {
+    const time = audioRef.current?.currentTime ?? 0;
+    nextCueIndexRef.current = findNextCueIndex(time, sceneRef.current.cues);
   }
 
   async function handleAudioPlay() {
@@ -858,8 +1137,9 @@ export function App() {
         </div>
         <DeviceCard
           connection={connection}
-          disabled={!hardwareControlReady}
-          onReconnect={() => void sendSocketAction('reconnect')}
+          disabled={!canReconnectHardware}
+          isReconnecting={isReconnecting}
+          onReconnect={() => void reconnectDmxDevice()}
           snapshot={snapshot}
         />
       </section>
@@ -930,6 +1210,18 @@ export function App() {
                 viewer.
               </small>
             </button>
+            <button
+              className="homeCard"
+              onClick={() => openPage('player')}
+              type="button"
+            >
+              <span>Player</span>
+              <strong>Show Player</strong>
+              <small>
+                Build a 20-row show list, load each song with its scene JSON,
+                and run playback beside the 3D stage.
+              </small>
+            </button>
           </div>
         </section>
       ) : (
@@ -945,12 +1237,18 @@ export function App() {
             </button>
             <div>
               <p className="eyebrow">
-                {activePage === 'control' ? 'Manual control' : 'Music sync'}
+                {activePage === 'control'
+                  ? 'Manual control'
+                  : activePage === 'music'
+                    ? 'Music sync'
+                    : 'Show player'}
               </p>
               <h2>
                 {activePage === 'control'
                   ? 'Control Light A/B'
-                  : 'Music Sync Page'}
+                  : activePage === 'music'
+                    ? 'Music Sync Page'
+                    : '20-Row Show Player'}
               </h2>
               {isPlaying ? (
                 <small>Pause Music Sync before leaving this page.</small>
@@ -977,7 +1275,7 @@ export function App() {
                   A009.
                 </small>
               </label>
-              {activePage === 'music' ? (
+              {activePage === 'music' || activePage === 'player' ? (
                 <button
                   className="blackoutButton scopeBlackout"
                   disabled={!hardwareControlReady}
@@ -996,6 +1294,17 @@ export function App() {
                 className="fixtureGrid"
                 aria-label="Control selected lights"
               >
+                {scene.fixtureCount > 1 ? (
+                  <FixtureControl
+                    fixture={activeFixtures[0]}
+                    fixtureIndex={0}
+                    headerKicker="Addresses A001 + A009"
+                    headerTitle="Both Lights"
+                    key="both-lights"
+                    onPatch={queueActiveFixturePatch}
+                    disabled={!hardwareControlReady}
+                  />
+                ) : null}
                 {activeFixtures.map((fixture, index) => (
                   <FixtureControl
                     fixture={fixture}
@@ -1081,7 +1390,7 @@ export function App() {
                 </div>
               </section>
             </>
-          ) : (
+          ) : activePage === 'music' ? (
             <>
               <section className="showGrid">
                 <div className="panel timelinePanel">
@@ -1114,6 +1423,30 @@ export function App() {
                         {scene.fixtureCount > 1 ? ', then A009' : ''}.
                       </small>
                     </div>
+                    <label>
+                      <span>Processing method</span>
+                      <select
+                        onChange={(event) =>
+                          setSceneGenerationMethod(
+                            event.target.value as SceneGenerationMethod,
+                          )
+                        }
+                        value={sceneGenerationMethod}
+                      >
+                        {SCENE_GENERATION_METHODS.map((method) => (
+                          <option key={method.id} value={method.id}>
+                            {method.label}
+                          </option>
+                        ))}
+                      </select>
+                      <small>
+                        {
+                          SCENE_GENERATION_METHODS.find(
+                            (method) => method.id === sceneGenerationMethod,
+                          )?.description
+                        }
+                      </small>
+                    </label>
                     <button onClick={createNewScene} type="button">
                       New Empty Scene
                     </button>
@@ -1124,24 +1457,15 @@ export function App() {
                       className="audioPlayer"
                       controls
                       onEnded={() => stopSceneClock()}
-                      onLoadedMetadata={(event) => {
-                        const duration = roundTime(
-                          event.currentTarget.duration,
+                      onLoadedMetadata={handleAudioLoadedMetadata}
+                      onError={() => {
+                        setSceneMessage(
+                          'Could not load the uploaded audio file. Try a standard MP3 or WAV export.',
                         );
-                        setSong((current) =>
-                          current ? { ...current, duration } : current,
-                        );
-                        setScene((current) => ({ ...current, duration }));
                       }}
                       onPause={() => stopSceneClock()}
                       onPlay={() => void handleAudioPlay()}
-                      onSeeked={() => {
-                        const time = audioRef.current?.currentTime ?? 0;
-                        nextCueIndexRef.current = findNextCueIndex(
-                          time,
-                          sceneRef.current.cues,
-                        );
-                      }}
+                      onSeeked={handleAudioSeeked}
                       ref={audioRef}
                       src={song.url}
                     />
@@ -1267,6 +1591,22 @@ export function App() {
                   {sceneMessage ? (
                     <p className="sceneMessage">{sceneMessage}</p>
                   ) : null}
+                  <details className="fixtureDebug sceneDebug">
+                    <summary>Cue JSON Debug</summary>
+                    <pre>
+                      {cueDebugJson || 'Select a cue to inspect its JSON.'}
+                    </pre>
+                    <button
+                      className="secondaryButton"
+                      disabled={!currentCue}
+                      onClick={() =>
+                        void navigator.clipboard?.writeText(cueDebugJson)
+                      }
+                      type="button"
+                    >
+                      Copy Cue JSON
+                    </button>
+                  </details>
                 </div>
 
                 <div className="panel cuePanel">
@@ -1316,6 +1656,170 @@ export function App() {
                 </div>
               </section>
             </>
+          ) : (
+            <>
+              <section className="playerGrid">
+                <div className="panel playerDeckPanel">
+                  <PanelHeader
+                    kicker="Show player"
+                    title="Loaded Row Transport"
+                  />
+                  <div className="playerNowCard">
+                    <div>
+                      <span>Row {selectedPlayerSlot + 1}</span>
+                      <strong>
+                        {currentPlayerSlot.scene?.name ?? 'No scene loaded'}
+                      </strong>
+                      <small>
+                        {currentPlayerSlot.song?.name ?? 'No song loaded'}
+                      </small>
+                    </div>
+                    <div className="playerNowStats">
+                      <span>
+                        {currentPlayerSlot.scene?.cues.length ?? 0} cues
+                      </span>
+                      <span>{scene.fixtureCount} lights</span>
+                      <span>
+                        {formatTime(song?.duration ?? scene.duration)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {song ? (
+                    <audio
+                      className="audioPlayer compactAudioPlayer"
+                      controls
+                      onEnded={() => stopSceneClock()}
+                      onError={() => {
+                        setSceneMessage(
+                          'Could not load the uploaded audio file. Try a standard MP3 or WAV export.',
+                        );
+                      }}
+                      onLoadedMetadata={handleAudioLoadedMetadata}
+                      onPause={() => stopSceneClock()}
+                      onPlay={() => void handleAudioPlay()}
+                      onSeeked={handleAudioSeeked}
+                      ref={audioRef}
+                      src={song.url}
+                    />
+                  ) : (
+                    <div className="emptyAudio">
+                      Load a row with a song before playback.
+                    </div>
+                  )}
+
+                  <div className="sceneActions playerActions">
+                    <button
+                      className="primaryButton"
+                      disabled={!song || !hardwareControlReady}
+                      onClick={() => void playScene()}
+                      type="button"
+                    >
+                      {isPlaying ? 'Playing Row' : 'Play Row'}
+                    </button>
+                    <button
+                      className="transportButton"
+                      disabled={!song}
+                      onClick={pauseScene}
+                      type="button"
+                    >
+                      Pause
+                    </button>
+                    <button
+                      className="transportButton"
+                      disabled={!song}
+                      onClick={stopScene}
+                      type="button"
+                    >
+                      Stop
+                    </button>
+                    <button
+                      className="secondaryButton"
+                      disabled={!cueCount || !hardwareControlReady}
+                      onClick={() => applyCue(scene.cues[0])}
+                      type="button"
+                    >
+                      Preview Start
+                    </button>
+                  </div>
+
+                  <SceneTimeline
+                    activeCueId={activeCueId}
+                    disabled={!hardwareControlReady}
+                    onSelectCue={(cue) => applyCue(cue, true)}
+                    scene={scene}
+                    songDuration={song?.duration ?? scene.duration}
+                  />
+                  {sceneMessage ? (
+                    <p className="sceneMessage">{sceneMessage}</p>
+                  ) : null}
+                </div>
+
+                <div className="panel playerStagePanel">
+                  <TheaterViewer fixtures={activeFixtures} />
+                </div>
+              </section>
+
+              <section className="panel playerListPanel">
+                <PanelHeader
+                  kicker="20 row show list"
+                  title="Music + Scene Assignments"
+                />
+                <div className="playerRows" aria-label="Show player rows">
+                  {playerSlots.map((slot, index) => {
+                    const loaded = Boolean(slot.song || slot.scene);
+                    const active = index === selectedPlayerSlot;
+                    return (
+                      <div
+                        className={active ? 'playerRow active' : 'playerRow'}
+                        key={index}
+                      >
+                        <button
+                          className="playerRowSelect"
+                          disabled={!loaded || isPlaying}
+                          onClick={() => loadPlayerSlot(index)}
+                          type="button"
+                        >
+                          <strong>{String(index + 1).padStart(2, '0')}</strong>
+                          <span>{slot.song?.name ?? 'Add music'}</span>
+                          <small>{slot.scene?.name ?? 'Add scene JSON'}</small>
+                        </button>
+                        <div className="playerRowFiles">
+                          <label>
+                            Music
+                            <input
+                              accept="audio/*"
+                              onChange={(event) =>
+                                handlePlayerSongUpload(index, event)
+                              }
+                              type="file"
+                            />
+                          </label>
+                          <label>
+                            Scene
+                            <input
+                              accept="application/json,.json"
+                              onChange={(event) =>
+                                void handlePlayerSceneUpload(index, event)
+                              }
+                              type="file"
+                            />
+                          </label>
+                        </div>
+                        <div className="playerRowMeta">
+                          <span>{slot.scene?.cues.length ?? 0} cues</span>
+                          <span>
+                            {slot.scene
+                              ? `${slot.scene.fixtureCount} ${slot.scene.fixtureCount === 1 ? 'light' : 'lights'}`
+                              : 'No scene'}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            </>
           )}
         </>
       )}
@@ -1352,7 +1856,9 @@ function CommandBar({
       ? 'Mode Select'
       : activePage === 'control'
         ? 'Manual Desk'
-        : 'Music Sync';
+        : activePage === 'music'
+          ? 'Music Sync'
+          : 'Show Player';
   const lockLabel = ownsLock ? 'Armed' : lock ? 'Read-only' : 'Standby';
   const updatedAt = new Date(snapshot.updatedAt).toLocaleTimeString([], {
     hour: '2-digit',
@@ -1559,17 +2065,77 @@ function FixtureControl({
   disabled,
   fixture,
   fixtureIndex,
+  headerKicker,
+  headerTitle,
   onPatch,
 }: {
   disabled: boolean;
   fixture: FixtureState;
   fixtureIndex: number;
+  headerKicker?: string;
+  headerTitle?: string;
   onPatch: (patch: DmxPatch) => void;
 }) {
   const config = FIXTURE_CONFIGS[fixtureIndex];
+  const title = headerTitle ?? config.label;
+  const kicker =
+    headerKicker ?? `Address A${String(config.startAddress).padStart(3, '0')}`;
   const activeMode = modeForValue(fixture.functionMode);
   const colorPreview = `rgb(${fixture.red}, ${fixture.green}, ${fixture.blue})`;
+  const debugJson = JSON.stringify(fixture, null, 2);
+  const [colorMenuOpen, setColorMenuOpen] = useState(false);
+  const [debugText, setDebugText] = useState(debugJson);
+  const [debugDirty, setDebugDirty] = useState(false);
+  const [debugError, setDebugError] = useState<string>();
+  const pendingDebugText = useRef<string | undefined>(undefined);
   const whiteAmount = Math.round((fixture.white / 255) * 100);
+
+  useEffect(() => {
+    if (debugDirty) {
+      return;
+    }
+
+    if (pendingDebugText.current) {
+      if (debugJson === pendingDebugText.current) {
+        pendingDebugText.current = undefined;
+      }
+      return;
+    }
+
+    setDebugText(debugJson);
+  }, [debugDirty, debugJson]);
+
+  function applyFixtureColor(color: DirectColorOption) {
+    onPatch({
+      ...color.patch,
+      functionMode: 0,
+      functionSpeed: 0,
+      strobe: 0,
+    });
+    setColorMenuOpen(false);
+  }
+
+  function resetDebugJson() {
+    pendingDebugText.current = undefined;
+    setDebugText(debugJson);
+    setDebugDirty(false);
+    setDebugError(undefined);
+  }
+
+  function applyDebugJson() {
+    try {
+      const patch = normalizeDmxPatch(JSON.parse(debugText));
+      const nextFixture = { ...fixture, ...patch };
+      const nextDebugText = JSON.stringify(nextFixture, null, 2);
+      pendingDebugText.current = nextDebugText;
+      setDebugText(nextDebugText);
+      setDebugDirty(false);
+      setDebugError(undefined);
+      onPatch(patch);
+    } catch (error) {
+      setDebugError(error instanceof Error ? error.message : 'Invalid JSON.');
+    }
+  }
 
   return (
     <div
@@ -1579,18 +2145,55 @@ function FixtureControl({
       }
     >
       <div className="fixtureHeader">
-        <PanelHeader
-          kicker={`Address A${String(config.startAddress).padStart(3, '0')}`}
-          title={config.label}
-        />
-        <div
-          className="miniPreview"
-          style={{
-            background: `linear-gradient(135deg, ${colorPreview}, rgba(255,255,255,${fixture.white / 255}))`,
-            opacity: Math.max(0.25, fixture.master / 255),
-          }}
-        >
-          {whiteAmount}% W
+        <PanelHeader kicker={kicker} title={title} />
+        <div className="colorMenuWrap">
+          <button
+            aria-expanded={colorMenuOpen}
+            aria-haspopup="menu"
+            className="miniPreview"
+            disabled={disabled}
+            onClick={() => setColorMenuOpen((open) => !open)}
+            style={{
+              background: `linear-gradient(135deg, ${colorPreview}, rgba(255,255,255,${fixture.white / 255}))`,
+              opacity: Math.max(0.25, fixture.master / 255),
+            }}
+            type="button"
+          >
+            <span>{whiteAmount}% W</span>
+            <small>Color</small>
+          </button>
+          {colorMenuOpen ? (
+            <div className="fixtureColorMenu" role="menu">
+              <div className="fixtureColorMenuHeader">
+                <strong>{headerTitle ?? config.shortLabel} color</strong>
+                <small>RGBW mix</small>
+              </div>
+              <div className="fixtureColorGrid">
+                {DIRECT_COLORS.map((color, index) => (
+                  <button
+                    aria-label={`${color.label}, ${Math.round((color.patch.white / 255) * 100)} percent white`}
+                    key={color.label}
+                    onClick={() => applyFixtureColor(color)}
+                    role="menuitem"
+                    style={
+                      {
+                        '--color-angle': `${(index / DIRECT_COLORS.length) * 360}deg`,
+                        '--color-preview': fixturePatchToCssColor(color.patch),
+                      } as CSSProperties
+                    }
+                    title={`${color.label} · ${Math.round((color.patch.white / 255) * 100)}% W`}
+                    type="button"
+                  >
+                    <span aria-hidden="true" />
+                    <strong>{color.label}</strong>
+                    <small>
+                      {Math.round((color.patch.white / 255) * 100)}% W
+                    </small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -1671,6 +2274,47 @@ function FixtureControl({
         state={fixture}
         tone="violet"
       />
+      <details className="fixtureDebug">
+        <summary>Debug JSON</summary>
+        <textarea
+          aria-label={`${title} editable debug JSON`}
+          disabled={disabled}
+          onChange={(event) => {
+            pendingDebugText.current = undefined;
+            setDebugText(event.target.value);
+            setDebugDirty(true);
+            setDebugError(undefined);
+          }}
+          spellCheck={false}
+          value={debugText}
+        />
+        {debugError ? <p className="debugError">{debugError}</p> : null}
+        <div className="debugActions">
+          <button
+            className="secondaryButton"
+            onClick={() => void navigator.clipboard?.writeText(debugText)}
+            type="button"
+          >
+            Copy JSON
+          </button>
+          <button
+            className="secondaryButton"
+            disabled={!debugDirty}
+            onClick={resetDebugJson}
+            type="button"
+          >
+            Reset
+          </button>
+          <button
+            className="primaryButton"
+            disabled={disabled || !debugDirty}
+            onClick={applyDebugJson}
+            type="button"
+          >
+            Apply JSON
+          </button>
+        </div>
+      </details>
     </div>
   );
 }
@@ -1678,16 +2322,26 @@ function FixtureControl({
 function DeviceCard({
   connection,
   disabled,
+  isReconnecting,
   onReconnect,
   snapshot,
 }: {
   connection: ConnectionState;
   disabled: boolean;
+  isReconnecting: boolean;
   onReconnect: () => void;
   snapshot: DmxSnapshot;
 }) {
   const status = snapshot.device;
   const online = status.connected && connection === 'connected';
+  const autoScanSeconds = status.autoReconnectMs
+    ? Math.round(status.autoReconnectMs / 1000)
+    : undefined;
+  const reconnectLabel = isReconnecting
+    ? 'Scanning...'
+    : status.driver === 'mock'
+      ? 'Connect uDMX'
+      : 'Reconnect uDMX';
   return (
     <aside className="deviceCard">
       <div className={online ? 'statusDot online' : 'statusDot'} />
@@ -1696,6 +2350,12 @@ function DeviceCard({
           {status.driver === 'udmx' ? 'uDMX hardware' : 'Mock output'}
         </p>
         <p>{status.detail}</p>
+        {status.autoReconnectActive ? (
+          <p>
+            Auto-scanning for uDMX every {autoScanSeconds ?? '?'}s. Plug in the
+            adapter and the app will switch from mock mode automatically.
+          </p>
+        ) : null}
         {status.lastError ? (
           <p className="deviceError">{status.lastError}</p>
         ) : null}
@@ -1709,11 +2369,11 @@ function DeviceCard({
         </small>
         <button
           className="secondaryButton deviceReconnect"
-          disabled={disabled}
+          disabled={disabled || isReconnecting}
           onClick={onReconnect}
           type="button"
         >
-          Reconnect uDMX
+          {reconnectLabel}
         </button>
       </div>
     </aside>
@@ -1910,6 +2570,7 @@ function parseStatusSocketPayload(data: unknown): StatusSocketPayload {
 async function generateSceneFromAudio(
   file: File,
   fixtureCount: number,
+  method: SceneGenerationMethod,
   onProgress: (progress: number) => void,
   fallbackDuration: number,
 ): Promise<GeneratedSceneResult> {
@@ -1929,10 +2590,11 @@ async function generateSceneFromAudio(
     });
     onProgress(90);
     await waitForPaint();
-    const generated = generateFolkloricSceneFromEnergyFrames({
+    const generated = generateSignalSceneFromEnergyFrames({
       duration: buffer.duration,
       frames,
       fixtureCount,
+      method,
       songName: file.name,
     });
     onProgress(100);
@@ -2037,12 +2699,19 @@ async function analyzeAudioBufferEnergy(
   );
   const frameCount = Math.max(1, Math.ceil(buffer.length / hopSize));
   const frames: EnergyFrame[] = [];
+  let previousEnergy = 0;
 
   for (
     let start = 0, frameIndex = 0;
     start < buffer.length;
     start += hopSize, frameIndex += 1
   ) {
+    let highSum = 0;
+    let lowSum = 0;
+    let midSum = 0;
+    let peak = 0;
+    let previousSample = 0;
+    let smoothed = 0;
     let sum = 0;
     let count = 0;
     const end = Math.min(buffer.length, start + windowSize);
@@ -2057,14 +2726,31 @@ async function analyzeAudioBufferEnergy(
         mixedSample += channel[sampleIndex] ?? 0;
       }
       mixedSample /= Math.max(1, channels.length);
+      const absolute = Math.abs(mixedSample);
+      const highComponent = mixedSample - previousSample;
+      smoothed = smoothed * 0.92 + mixedSample * 0.08;
+      lowSum += smoothed * smoothed;
+      highSum += highComponent * highComponent;
+      midSum += Math.max(0, absolute - Math.abs(smoothed)) ** 2;
+      peak = Math.max(peak, absolute);
+      previousSample = mixedSample;
       sum += mixedSample * mixedSample;
       count += 1;
     }
 
+    const energy = Math.sqrt(sum / Math.max(1, count));
+
     frames.push({
-      energy: Math.sqrt(sum / Math.max(1, count)),
+      energy,
+      flux: Math.max(0, energy - previousEnergy),
+      high: Math.sqrt(highSum / Math.max(1, count)),
+      low: Math.sqrt(lowSum / Math.max(1, count)),
+      mid: Math.sqrt(midSum / Math.max(1, count)),
+      peak,
+      rms: energy,
       time: start / sampleRate,
     });
+    previousEnergy = energy;
 
     if (frameIndex % 90 === 0) {
       onProgress(Math.min(100, Math.round((frameIndex / frameCount) * 100)));

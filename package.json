@@ -20,6 +20,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json && tsc --noEmit -p tsconfig.electron.json",
     "test": "vitest run",
     "test:soak": "tsx scripts/dmx-soak.ts",
+    "test:soak:scene": "tsx scripts/dmx-soak.ts --interval-ms=50 --stats-interval-ms=5000 --operation-timeout-ms=5000 --blackout-interval-minutes=0 --reconnect-interval-minutes=0",
+    "test:soak:hardware": "npm run test:soak:scene -- --driver=udmx",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

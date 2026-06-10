@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  SCENE_GENERATION_METHODS,
   clampSceneFixtureCount,
   createAutoCue,
   fallbackCueTimes,
   findNextCueIndex,
   formatTime,
   generateFolkloricSceneFromSamples,
+  generateSignalSceneFromEnergyFrames,
   normalizeImportedScene,
   normalizePatchLoose,
   roundTime,
@@ -146,6 +148,44 @@ describe('scene model', () => {
     expect(scene.cues.every((cue) => cue.fixtures[0].functionMode === 0)).toBe(
       true,
     );
+  });
+
+  it('generates cues for every music processing method', () => {
+    const frames = Array.from({ length: 96 }, (_unused, index) => {
+      const time = index * 0.25;
+      const pulse = index % 8 === 0 ? 0.95 : 0.2 + (index % 5) * 0.08;
+      return {
+        energy: pulse,
+        flux: index % 8 === 0 ? 0.7 : 0.05,
+        high: index % 3 === 0 ? 0.62 : 0.18,
+        low: index % 4 === 0 ? 0.72 : 0.22,
+        mid: index % 5 === 0 ? 0.58 : 0.26,
+        peak: Math.min(1, pulse + 0.08),
+        rms: pulse * 0.82,
+        time,
+      };
+    });
+
+    for (const method of SCENE_GENERATION_METHODS) {
+      const scene = generateSignalSceneFromEnergyFrames({
+        duration: 24,
+        fixtureCount: 2,
+        frames,
+        method: method.id,
+        songName: 'analysis.wav',
+      });
+
+      expect(scene.cues.length, method.id).toBeGreaterThan(0);
+      expect(scene.cues.length, method.id).toBeLessThanOrEqual(220);
+      expect(scene.cues.every((cue) => cue.fixtures.length === 2)).toBe(true);
+      expect(
+        scene.cues
+          .flatMap((cue) => cue.fixtures)
+          .every((fixture) => {
+            return fixture.functionMode === 0;
+          }),
+      ).toBe(true);
+    }
   });
 
   it('interpolates RGBW dimming between scene cues during playback', () => {

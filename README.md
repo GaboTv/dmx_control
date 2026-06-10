@@ -83,7 +83,7 @@ Unsigned first releases may trigger Windows SmartScreen or macOS Gatekeeper warn
 
 ## Hardware Mode
 
-`DMX_DRIVER=auto` tries the uDMX adapter first and falls back to mock mode if hardware is unavailable. Use `DMX_DRIVER=udmx` when the app should fail startup unless the adapter is connected.
+`DMX_DRIVER=auto` tries the uDMX adapter first and falls back to mock mode if hardware is unavailable. While in mock mode, the backend auto-scans for uDMX every `UDMX_AUTO_RECONNECT_MS` milliseconds and switches to hardware as soon as the adapter appears. Use `DMX_DRIVER=udmx` when the app should fail startup unless the adapter is connected.
 
 Default uDMX USB IDs are `UDMX_VENDOR_ID=0x16c0` and `UDMX_PRODUCT_ID=0x05dc`.
 
@@ -91,11 +91,14 @@ For the uDMX adapter, use the `.env.example` defaults:
 
 ```env
 UDMX_WRITE_MODE=multi
+UDMX_AUTO_RECONNECT_MS=5000
 UDMX_REFRESH_MS=0
 DMX_WRITE_DEBOUNCE_MS=150
 ```
 
 `UDMX_WRITE_MODE=multi` sends the full 16-channel show frame as one control transfer. `UDMX_WRITE_MODE=single` sends changed channels one at a time. `UDMX_WRITE_MODE=auto` tries multi and falls back to single after a transfer failure.
+
+Set `UDMX_AUTO_RECONNECT_MS=0` to disable automatic uDMX scanning while in mock mode.
 
 Music Sync prioritizes smooth automatic RGBW dimming: scene interpolation sends changed frames at up to about 20 updates/second while playback runs.
 
@@ -108,6 +111,8 @@ npm run dev:web    # frontend only
 npm run typecheck
 npm test
 npm run test:soak # mock DMX long-run soak, defaults to 5 hours
+npm run test:soak:scene # 20 Hz scene-playback soak, mock by default
+npm run test:soak:hardware # 20 Hz scene-playback soak against real uDMX
 npm run build
 npm start          # serves dist/client from the API server
 npm run electron:build
@@ -117,26 +122,38 @@ npm run electron:build
 
 `npm test` includes fast checks for the DMX model, scene import/generation helpers, controller debounce, serialized writes, write-failure recovery, and a fake-timer simulation of 5 hours of refresh ticks.
 
-Run `npm run test:soak` before unattended use to exercise the controller in mock mode for 5 real hours. Use `npm run test:soak -- --minutes=30` for a shorter local soak. The soak workload sends changing RGBW frames every `250ms` by default, plus periodic blackout and reconnect checks.
+Run `npm run test:soak` before unattended use to exercise the controller in mock mode for 5 real hours. Use `npm run test:soak -- --minutes=30` for a shorter local soak. The default soak workload sends changing RGBW frames every `250ms`.
+
+For production readiness, run the scene-playback profile for the full 5 hours. It sends changed frames at `50ms` intervals, disables artificial blackout/reconnect actions, fails if an operation takes longer than `5000ms`, and reports event-loop delay plus memory use:
+
+```bash
+npm run test:soak:scene
+```
+
+For real USB stability, plug in uDMX and run the same 20 Hz profile against hardware:
+
+```bash
+npm run test:soak:hardware
+```
 
 Soak stats print every `30s` by default:
 
 ```text
-[soak:stats] elapsed=0m30s remaining=29m30s updates=120 packets=121 packets/s=4.03 updates/s=4.00 driver=mock connected=true failures=0
+[soak:stats] elapsed=0m30s remaining=299m30s updates=600 packets=601 packets/s=20.03 updates/s=20.00 driver=udmx mode=multi connected=true failures=0 eventLoopMaxMs=22.4 eventLoopMeanMs=20.1 heapMb=18.7 rssMb=82.3
 ```
 
-`updates` is controller update cycles. `packets` is actual output packets: mock and uDMX `multi` mode count one packet per frame, while uDMX `single` mode counts each successful USB control transfer. Use `--stats-interval-ms=5000` to print stats more often.
+`updates` is controller update cycles. `packets` is actual output packets: mock and uDMX `multi` mode count one packet per frame, while uDMX `single` mode counts each successful USB control transfer. The soak fails on disconnects, increased uDMX write failures, event-loop stalls above `--max-event-loop-delay-ms` (default `2000`), or operations that exceed `--operation-timeout-ms` (default `5000`).
 
 To test the real USB-to-DMX path, run hardware mode explicitly:
 
 ```bash
-npm run test:soak -- --driver=udmx --minutes=30
+npm run test:soak -- --driver=udmx --minutes=30 --stats-interval-ms=5000
 ```
 
-Hardware soak mode changes connected light colors and fails if uDMX disconnects or write failures increase. Use `--interval-ms=50` to approximate 20 Hz scene-playback writes, and add `--strobe` only if visible strobe flashes are acceptable:
+Hardware soak mode changes connected light colors and fails if uDMX disconnects or write failures increase. Add `--strobe` only if visible strobe flashes are acceptable. Use time-based options only when you intentionally want to test those controls during a soak:
 
 ```bash
-npm run test:soak -- --driver=udmx --minutes=30 --interval-ms=50 --stats-interval-ms=5000
+npm run test:soak -- --driver=udmx --minutes=30 --blackout-interval-minutes=10 --reconnect-interval-minutes=30
 ```
 
 ## API

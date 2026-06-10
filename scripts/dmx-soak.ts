@@ -1,3 +1,5 @@
+import { monitorEventLoopDelay } from 'node:perf_hooks';
+
 import { DmxController } from '../src/server/dmxController.js';
 import {
   serverConfig,
@@ -11,13 +13,19 @@ import {
 } from '../src/shared/dmx.js';
 
 const DEFAULT_MINUTES = 300;
+const DEFAULT_OPERATION_TIMEOUT_MS = 5000;
 const DEFAULT_STATS_INTERVAL_MS = 30_000;
+const DEFAULT_MAX_EVENT_LOOP_DELAY_MS = 2000;
 const UPDATE_INTERVAL_MS = 250;
 
 interface SoakOptions {
+  blackoutIntervalMs: number;
   driver: DmxDriverMode;
   intervalMs: number;
+  maxEventLoopDelayMs: number;
   minutes: number;
+  operationTimeoutMs: number;
+  reconnectIntervalMs: number;
   statsIntervalMs: number;
   strobe: boolean;
 }
@@ -40,19 +48,31 @@ process.on('unhandledRejection', (reason) => {
 const options = parseOptions();
 const startedAt = Date.now();
 const deadline = Date.now() + options.minutes * 60_000;
-const controller = await DmxController.create(soakConfig(options.driver));
+const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
+eventLoopDelay.enable();
+const controller = await withTimeout(
+  DmxController.create(soakConfig(options.driver)),
+  options.operationTimeoutMs,
+  'controller startup',
+);
 const initialSnapshot = controller.snapshot();
 const packetStats = createPacketStats(initialSnapshot.device);
 let iterations = 0;
 let lastDevice = initialSnapshot.device;
 let lastFailures = initialSnapshot.device.failures ?? 0;
+let nextBlackoutAt = nextScheduledAt(options.blackoutIntervalMs);
+let nextReconnectAt = nextScheduledAt(options.reconnectIntervalMs);
 let nextStatsAt = Date.now() + options.statsIntervalMs;
+let nextUpdateAt = Date.now();
 
 console.log(
   `[soak] Starting ${options.minutes}-minute ${options.driver} DMX soak test with color changes every ${options.intervalMs}ms. Press Ctrl+C to stop early.`,
 );
 console.log(
-  `[soak] Stats every ${(options.statsIntervalMs / 1000).toFixed(0)}s.`,
+  `[soak] Stats every ${(options.statsIntervalMs / 1000).toFixed(0)}s; operation timeout ${options.operationTimeoutMs}ms; max event-loop delay ${options.maxEventLoopDelayMs}ms.`,
+);
+console.log(
+  `[soak] Blackout interval: ${formatInterval(options.blackoutIntervalMs)}; reconnect interval: ${formatInterval(options.reconnectIntervalMs)}.`,
 );
 
 if (options.driver === 'udmx') {
@@ -73,16 +93,27 @@ try {
       throw fatalError;
     }
 
-    const snapshot = await controller.update(
-      { fixtures: nextFixturePatches(iterations, options.strobe) },
-      { immediate: true },
+    await sleep(Math.max(0, nextUpdateAt - Date.now()));
+    nextUpdateAt += options.intervalMs;
+
+    const snapshot = await withTimeout(
+      controller.update(
+        { fixtures: nextFixturePatches(iterations, options.strobe) },
+        { immediate: true },
+      ),
+      options.operationTimeoutMs,
+      'DMX update',
     );
     lastDevice = snapshot.device;
     updatePacketStats(packetStats, lastDevice);
     lastFailures = assertExpectedDevice(snapshot.device, options, lastFailures);
 
-    if (iterations > 0 && iterations % 240 === 0) {
-      const blackoutSnapshot = await controller.blackout();
+    if (options.blackoutIntervalMs > 0 && Date.now() >= nextBlackoutAt) {
+      const blackoutSnapshot = await withTimeout(
+        controller.blackout(),
+        options.operationTimeoutMs,
+        'DMX blackout',
+      );
       lastFailures = assertExpectedDevice(
         blackoutSnapshot.device,
         options,
@@ -90,10 +121,15 @@ try {
       );
       lastDevice = blackoutSnapshot.device;
       updatePacketStats(packetStats, lastDevice);
+      nextBlackoutAt = Date.now() + options.blackoutIntervalMs;
     }
 
-    if (iterations > 0 && iterations % 600 === 0) {
-      const reconnectSnapshot = await controller.reconnect();
+    if (options.reconnectIntervalMs > 0 && Date.now() >= nextReconnectAt) {
+      const reconnectSnapshot = await withTimeout(
+        controller.reconnect(),
+        options.operationTimeoutMs,
+        'DMX reconnect',
+      );
       lastFailures = assertExpectedDevice(
         reconnectSnapshot.device,
         options,
@@ -101,27 +137,37 @@ try {
       );
       lastDevice = reconnectSnapshot.device;
       updatePacketStats(packetStats, lastDevice);
+      nextReconnectAt = Date.now() + options.reconnectIntervalMs;
     }
 
     iterations += 1;
     if (Date.now() >= nextStatsAt) {
+      assertEventLoopHealthy(eventLoopDelay.max, options);
       printStats('stats', {
         deadline,
         device: lastDevice,
+        eventLoopMaxMs: nanosecondsToMilliseconds(eventLoopDelay.max),
+        eventLoopMeanMs: nanosecondsToMilliseconds(eventLoopDelay.mean),
         iterations,
         options,
         packetStats,
         startedAt,
       });
+      eventLoopDelay.reset();
       nextStatsAt = Date.now() + options.statsIntervalMs;
     }
 
-    await sleep(options.intervalMs);
+    if (nextUpdateAt < Date.now() - options.intervalMs) {
+      nextUpdateAt = Date.now() + options.intervalMs;
+    }
   }
 
+  assertEventLoopHealthy(eventLoopDelay.max, options);
   printStats('final', {
     deadline,
     device: lastDevice,
+    eventLoopMaxMs: nanosecondsToMilliseconds(eventLoopDelay.max),
+    eventLoopMeanMs: nanosecondsToMilliseconds(eventLoopDelay.mean),
     iterations,
     options,
     packetStats,
@@ -131,18 +177,45 @@ try {
     `[soak] Completed ${iterations} updates without uncaught errors.`,
   );
 } finally {
-  const finalSnapshot = await controller.blackout();
+  eventLoopDelay.disable();
+  const finalSnapshot = await withTimeout(
+    controller.blackout(),
+    options.operationTimeoutMs,
+    'final blackout',
+  );
   updatePacketStats(packetStats, finalSnapshot.device);
-  await controller.close();
+  await withTimeout(controller.close(), options.operationTimeoutMs, 'close');
 }
 
 function parseOptions(): SoakOptions {
+  const blackoutIntervalMs = parseIntervalMinutes(
+    '--blackout-interval-minutes=',
+    'SOAK_BLACKOUT_INTERVAL_MINUTES',
+    0,
+  );
   const driver = parseDriver();
   const minutes = parseMinutes();
   const intervalMs = parseIntervalMs();
+  const maxEventLoopDelayMs = parseMaxEventLoopDelayMs();
+  const operationTimeoutMs = parseOperationTimeoutMs();
+  const reconnectIntervalMs = parseIntervalMinutes(
+    '--reconnect-interval-minutes=',
+    'SOAK_RECONNECT_INTERVAL_MINUTES',
+    0,
+  );
   const statsIntervalMs = parseStatsIntervalMs();
   const strobe = process.argv.includes('--strobe');
-  return { driver, intervalMs, minutes, statsIntervalMs, strobe };
+  return {
+    blackoutIntervalMs,
+    driver,
+    intervalMs,
+    maxEventLoopDelayMs,
+    minutes,
+    operationTimeoutMs,
+    reconnectIntervalMs,
+    statsIntervalMs,
+    strobe,
+  };
 }
 
 function parseDriver(): DmxDriverMode {
@@ -151,10 +224,8 @@ function parseDriver(): DmxDriverMode {
   }
 
   const raw =
-    process.argv
-      .find((value) => value.startsWith('--driver='))
-      ?.split('=')[1]
-      ?.toLowerCase() ?? process.env.SOAK_DMX_DRIVER?.toLowerCase();
+    optionValue('--driver=')?.toLowerCase() ??
+    process.env.SOAK_DMX_DRIVER?.toLowerCase();
 
   if (raw === 'mock' || raw === 'udmx' || raw === 'auto') {
     return raw;
@@ -164,24 +235,57 @@ function parseDriver(): DmxDriverMode {
 }
 
 function parseMinutes(): number {
-  const arg = process.argv.find((value) => value.startsWith('--minutes='));
-  const raw = arg?.split('=')[1] ?? process.env.SOAK_MINUTES;
+  const raw = optionValue('--minutes=') ?? process.env.SOAK_MINUTES;
   const parsed = raw ? Number(raw) : DEFAULT_MINUTES;
   return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MINUTES;
 }
 
 function parseIntervalMs(): number {
-  const arg = process.argv.find((value) => value.startsWith('--interval-ms='));
-  const raw = arg?.split('=')[1] ?? process.env.SOAK_INTERVAL_MS;
+  const raw = optionValue('--interval-ms=') ?? process.env.SOAK_INTERVAL_MS;
   const parsed = raw ? Number(raw) : UPDATE_INTERVAL_MS;
   return Number.isFinite(parsed) && parsed >= 20 ? parsed : UPDATE_INTERVAL_MS;
 }
 
+function parseIntervalMinutes(
+  argName: string,
+  envName: string,
+  fallback: number,
+): number {
+  const raw = optionValue(argName) ?? process.env[envName];
+  const parsed = raw ? Number(raw) : fallback;
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed * 60_000 : fallback;
+}
+
+function parseMaxEventLoopDelayMs(): number {
+  const raw =
+    optionValue('--max-event-loop-delay-ms=') ??
+    process.env.SOAK_MAX_EVENT_LOOP_DELAY_MS;
+  const parsed = raw ? Number(raw) : DEFAULT_MAX_EVENT_LOOP_DELAY_MS;
+  return Number.isFinite(parsed) && parsed >= 100
+    ? parsed
+    : DEFAULT_MAX_EVENT_LOOP_DELAY_MS;
+}
+
+function parseOperationTimeoutMs(): number {
+  const raw =
+    optionValue('--operation-timeout-ms=') ??
+    process.env.SOAK_OPERATION_TIMEOUT_MS;
+  const parsed = raw ? Number(raw) : DEFAULT_OPERATION_TIMEOUT_MS;
+  return Number.isFinite(parsed) && parsed >= 100
+    ? parsed
+    : DEFAULT_OPERATION_TIMEOUT_MS;
+}
+
+function optionValue(prefix: string): string | undefined {
+  const value = [...process.argv]
+    .reverse()
+    .find((argument) => argument.startsWith(prefix));
+  return value?.slice(prefix.length);
+}
+
 function parseStatsIntervalMs(): number {
-  const arg = process.argv.find((value) =>
-    value.startsWith('--stats-interval-ms='),
-  );
-  const raw = arg?.split('=')[1] ?? process.env.SOAK_STATS_INTERVAL_MS;
+  const raw =
+    optionValue('--stats-interval-ms=') ?? process.env.SOAK_STATS_INTERVAL_MS;
   const parsed = raw ? Number(raw) : DEFAULT_STATS_INTERVAL_MS;
   return Number.isFinite(parsed) && parsed >= 1000
     ? parsed
@@ -243,6 +347,8 @@ function printStats(
   input: {
     deadline: number;
     device: DmxDeviceStatus;
+    eventLoopMaxMs: number;
+    eventLoopMeanMs: number;
     iterations: number;
     options: SoakOptions;
     packetStats: PacketStats;
@@ -258,10 +364,27 @@ function printStats(
   const writeMode = input.device.writeMode
     ? ` mode=${input.device.writeMode}`
     : '';
+  const memory = process.memoryUsage();
 
   console.log(
-    `[soak:${label}] elapsed=${formatDuration(elapsedSeconds)} remaining=${formatDuration(remainingSeconds)} updates=${input.iterations} packets=${input.packetStats.totalPackets} packets/s=${packetRate.toFixed(2)} updates/s=${updateRate.toFixed(2)} driver=${input.device.driver}${writeMode} connected=${input.device.connected} failures=${failures}`,
+    `[soak:${label}] elapsed=${formatDuration(elapsedSeconds)} remaining=${formatDuration(remainingSeconds)} updates=${input.iterations} packets=${input.packetStats.totalPackets} packets/s=${packetRate.toFixed(2)} updates/s=${updateRate.toFixed(2)} driver=${input.device.driver}${writeMode} connected=${input.device.connected} failures=${failures} eventLoopMaxMs=${input.eventLoopMaxMs.toFixed(1)} eventLoopMeanMs=${input.eventLoopMeanMs.toFixed(1)} heapMb=${bytesToMegabytes(memory.heapUsed).toFixed(1)} rssMb=${bytesToMegabytes(memory.rss).toFixed(1)}`,
   );
+}
+
+function assertEventLoopHealthy(
+  maxEventLoopDelayNs: number,
+  options: SoakOptions,
+): void {
+  const maxEventLoopDelayMs = nanosecondsToMilliseconds(maxEventLoopDelayNs);
+  if (maxEventLoopDelayMs > options.maxEventLoopDelayMs) {
+    throw new Error(
+      `Event loop delay ${maxEventLoopDelayMs.toFixed(1)}ms exceeded ${options.maxEventLoopDelayMs}ms.`,
+    );
+  }
+}
+
+function bytesToMegabytes(bytes: number): number {
+  return bytes / 1024 / 1024;
 }
 
 function formatDuration(totalSeconds: number): string {
@@ -269,6 +392,18 @@ function formatDuration(totalSeconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainder = seconds % 60;
   return `${minutes}m${remainder.toString().padStart(2, '0')}s`;
+}
+
+function formatInterval(ms: number): string {
+  return ms > 0 ? formatDuration(ms / 1000) : 'disabled';
+}
+
+function nanosecondsToMilliseconds(value: number): number {
+  return value / 1_000_000;
+}
+
+function nextScheduledAt(intervalMs: number): number {
+  return intervalMs > 0 ? Date.now() + intervalMs : Number.POSITIVE_INFINITY;
 }
 
 function assertExpectedDevice(
@@ -299,4 +434,27 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error(`${label} did not finish within ${timeoutMs}ms.`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }

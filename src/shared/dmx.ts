@@ -167,6 +167,8 @@ export const FUNCTION_MODES = [
 export type FunctionModeId = (typeof FUNCTION_MODES)[number]['id'];
 
 export interface DmxDeviceStatus {
+  autoReconnectActive?: boolean;
+  autoReconnectMs?: number;
   connected: boolean;
   driver: 'mock' | 'udmx';
   detail: string;

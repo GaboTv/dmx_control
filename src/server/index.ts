@@ -70,6 +70,7 @@ app.use(
         connectSrc: ["'self'", 'ws:', 'wss:'],
         defaultSrc: ["'self'"],
         imgSrc: ["'self'", 'data:'],
+        mediaSrc: ["'self'", 'blob:'],
         objectSrc: ["'none'"],
         scriptSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
