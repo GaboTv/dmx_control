@@ -179,3 +179,16 @@ Keep this app on a trusted local network. It controls physical lighting hardware
 - Test `DMX_DRIVER=mock`; if the adapter still disappears from Windows, the issue is outside this app.
 - Plug uDMX directly into the PC, avoid hubs, and disable USB selective suspend plus USB hub power saving in Device Manager.
 - Close QLC+, DMXControl, OLA, or any other program that may also open the uDMX adapter.
+
+## Troubleshooting uDMX On macOS
+
+- In System Information -> USB, confirm the uDMX device shows Product ID `0x05dc` and Vendor ID `0x16c0`; those are the app defaults.
+- If the desktop app stays in mock mode, open the device card's `USB devices seen by app` section. It lists what the packaged native `usb` module can enumerate, which may differ from System Information if native USB loading failed.
+- To force a hard failure instead of mock fallback, launch from Terminal:
+
+```bash
+DMX_DRIVER=udmx "/Applications/DMX Light Control.app/Contents/MacOS/DMX Light Control"
+```
+
+- If the Terminal error says the native `usb` module failed to load, rebuild the macOS release from GitHub Actions or on the target Mac so `node_modules/usb` is rebuilt for the Electron/macOS architecture.
+- If the app sees `0x16c0:0x05dc` but still cannot open it, close other DMX/USB tools and reconnect the adapter directly rather than through a hub.

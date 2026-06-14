@@ -178,6 +178,8 @@ export interface DmxDeviceStatus {
   lastFrameAt?: string;
   packets?: number;
   productId?: string;
+  runtime?: string;
+  usbDevices?: string[];
   vendorId?: string;
   writeMode?: string;
   writes: number;

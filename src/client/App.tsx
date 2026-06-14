@@ -2359,6 +2359,13 @@ function DeviceCard({
         {status.lastError ? (
           <p className="deviceError">{status.lastError}</p>
         ) : null}
+        {status.usbDevices?.length ? (
+          <details className="deviceUsbDebug">
+            <summary>USB devices seen by app</summary>
+            <pre>{status.usbDevices.join('\n')}</pre>
+          </details>
+        ) : null}
+        {status.runtime ? <small>{status.runtime}</small> : null}
         <small>
           {status.vendorId && status.productId
             ? `${status.vendorId}:${status.productId} · `

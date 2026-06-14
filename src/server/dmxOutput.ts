@@ -9,6 +9,7 @@ export interface DmxOutput {
 }
 
 type UsbDevice = {
+  busNumber?: number;
   close: () => void;
   controlTransfer: (
     bmRequestType: number,
@@ -18,15 +19,40 @@ type UsbDevice = {
     data: Buffer,
     callback: (error?: Error, actual?: number) => void,
   ) => void;
+  deviceAddress?: number;
+  deviceDescriptor?: {
+    bcdDevice?: number;
+    idProduct?: number;
+    idVendor?: number;
+    iManufacturer?: number;
+    iProduct?: number;
+  };
   open: () => void;
+  portNumbers?: number[];
 };
 
 type UsbApi = {
   findByIds?: (vendorId: number, productId: number) => UsbDevice | undefined;
+  getDeviceList?: () => UsbDevice[];
   usb?: {
     findByIds?: (vendorId: number, productId: number) => UsbDevice | undefined;
+    getDeviceList?: () => UsbDevice[];
   };
 };
+
+interface UsbDiagnostics {
+  runtime?: string;
+  usbDevices?: string[];
+}
+
+class UDmxError extends Error {
+  constructor(
+    message: string,
+    readonly diagnostics: UsbDiagnostics = {},
+  ) {
+    super(message);
+  }
+}
 
 function toHexId(value: number): string {
   return `0x${value.toString(16).padStart(4, '0')}`;
@@ -34,6 +60,74 @@ function toHexId(value: number): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function describeUsbDevice(device: UsbDevice): string {
+  const descriptor = device.deviceDescriptor;
+  const vendorId = descriptor?.idVendor;
+  const productId = descriptor?.idProduct;
+  const id =
+    typeof vendorId === 'number' && typeof productId === 'number'
+      ? `${toHexId(vendorId)}:${toHexId(productId)}`
+      : 'unknown:unknown';
+  const details = [
+    typeof device.busNumber === 'number' ? `bus=${device.busNumber}` : '',
+    typeof device.deviceAddress === 'number'
+      ? `address=${device.deviceAddress}`
+      : '',
+    device.portNumbers?.length ? `ports=${device.portNumbers.join('.')}` : '',
+    typeof descriptor?.iManufacturer === 'number'
+      ? `manufacturerIndex=${descriptor.iManufacturer}`
+      : '',
+    typeof descriptor?.iProduct === 'number'
+      ? `productIndex=${descriptor.iProduct}`
+      : '',
+  ].filter(Boolean);
+
+  return details.length ? `${id} (${details.join(', ')})` : id;
+}
+
+function runtimeInfo(): string {
+  return [
+    `platform=${process.platform}`,
+    `arch=${process.arch}`,
+    `node=${process.version}`,
+    `electron=${process.versions.electron ?? 'none'}`,
+  ].join(', ');
+}
+
+function visibleUsbDevices(usb: UsbApi): string[] {
+  const getDeviceList = usb.getDeviceList ?? usb.usb?.getDeviceList;
+
+  if (!getDeviceList) {
+    return ['USB device listing unavailable from native usb package.'];
+  }
+
+  try {
+    const devices = getDeviceList();
+
+    if (!devices.length) {
+      return ['No USB devices reported by native usb package.'];
+    }
+
+    return devices.slice(0, 24).map(describeUsbDevice);
+  } catch (error) {
+    return [`USB device listing failed: ${errorMessage(error)}`];
+  }
+}
+
+function usbDiagnosticsMessage(diagnostics: UsbDiagnostics): string {
+  const parts: string[] = [];
+
+  if (diagnostics.runtime) {
+    parts.push(`Runtime: ${diagnostics.runtime}.`);
+  }
+
+  if (diagnostics.usbDevices?.length) {
+    parts.push(`Visible USB devices: ${diagnostics.usbDevices.join('; ')}.`);
+  }
+
+  return parts.length ? ` ${parts.join(' ')}` : '';
 }
 
 export class MockDmxOutput implements DmxOutput {
@@ -44,6 +138,7 @@ export class MockDmxOutput implements DmxOutput {
 
   constructor(
     private readonly detail = 'Mock DMX output active; no USB writes are being sent.',
+    private readonly diagnostics: Partial<DmxDeviceStatus> = {},
   ) {}
 
   async close(): Promise<void> {
@@ -62,6 +157,7 @@ export class MockDmxOutput implements DmxOutput {
       connected: true,
       detail: this.detail,
       driver: 'mock',
+      ...this.diagnostics,
       lastFrameAt: this.lastFrameAt,
       packets: this.packets,
       writes: this.writes,
@@ -119,7 +215,10 @@ export class UDmxOutput implements DmxOutput {
 
       if (!findByIds) {
         return this.markDeviceDisconnected(
-          'The installed usb package does not expose findByIds().',
+          this.deviceUnavailableMessage(
+            usb,
+            'The installed usb package does not expose findByIds().',
+          ),
         );
       }
 
@@ -130,9 +229,12 @@ export class UDmxOutput implements DmxOutput {
 
       if (!device) {
         return this.markDeviceDisconnected(
-          `uDMX adapter disconnected from ${toHexId(this.config.udmxVendorId)}:${toHexId(
-            this.config.udmxProductId,
-          )}.`,
+          this.deviceUnavailableMessage(
+            usb,
+            `uDMX adapter disconnected from ${toHexId(this.config.udmxVendorId)}:${toHexId(
+              this.config.udmxProductId,
+            )}.`,
+          ),
         );
       }
 
@@ -273,7 +375,13 @@ export class UDmxOutput implements DmxOutput {
     const findByIds = usb.findByIds ?? usb.usb?.findByIds;
 
     if (!findByIds) {
-      throw new Error('The installed usb package does not expose findByIds().');
+      throw new UDmxError(
+        this.deviceUnavailableMessage(
+          usb,
+          'The installed usb package does not expose findByIds().',
+        ),
+        this.usbDiagnostics(usb),
+      );
     }
 
     const device = findByIds(
@@ -281,10 +389,14 @@ export class UDmxOutput implements DmxOutput {
       this.config.udmxProductId,
     );
     if (!device) {
-      throw new Error(
-        `uDMX adapter not found at ${toHexId(this.config.udmxVendorId)}:${toHexId(
-          this.config.udmxProductId,
-        )}.`,
+      throw new UDmxError(
+        this.deviceUnavailableMessage(
+          usb,
+          `uDMX adapter not found at ${toHexId(this.config.udmxVendorId)}:${toHexId(
+            this.config.udmxProductId,
+          )}.`,
+        ),
+        this.usbDiagnostics(usb),
       );
     }
 
@@ -333,6 +445,17 @@ export class UDmxOutput implements DmxOutput {
       );
     }
   }
+
+  private deviceUnavailableMessage(usb: UsbApi, message: string): string {
+    return `${message}${usbDiagnosticsMessage(this.usbDiagnostics(usb))}`;
+  }
+
+  private usbDiagnostics(usb: UsbApi): UsbDiagnostics {
+    return {
+      runtime: runtimeInfo(),
+      usbDevices: visibleUsbDevices(usb),
+    };
+  }
 }
 
 export async function createDmxOutput(
@@ -351,12 +474,37 @@ export async function createDmxOutput(
 
     return new MockDmxOutput(
       `uDMX unavailable, running in mock mode: ${errorMessage(error)}`,
+      {
+        lastError: errorMessage(error),
+        lastErrorAt: new Date().toISOString(),
+        productId: toHexId(config.udmxProductId),
+        runtime:
+          error instanceof UDmxError
+            ? error.diagnostics.runtime
+            : runtimeInfo(),
+        usbDevices:
+          error instanceof UDmxError ? error.diagnostics.usbDevices : undefined,
+        vendorId: toHexId(config.udmxVendorId),
+      },
     );
   }
 }
 
 async function loadUsbApi(): Promise<UsbApi> {
   const moduleName = 'usb';
-  const imported = (await import(moduleName)) as UsbApi & { default?: UsbApi };
-  return imported.default ?? imported;
+  try {
+    const imported = (await import(moduleName)) as UsbApi & {
+      default?: UsbApi;
+    };
+    return imported.default ?? imported;
+  } catch (error) {
+    throw new UDmxError(
+      `Failed to load native usb module: ${errorMessage(error)}${usbDiagnosticsMessage(
+        {
+          runtime: runtimeInfo(),
+        },
+      )}`,
+      { runtime: runtimeInfo() },
+    );
+  }
 }

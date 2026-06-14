@@ -94,12 +94,57 @@ describe('uDMX output', () => {
 
     await expect(output.checkHealth?.()).resolves.toBe(true);
 
-    expect(output.status()).toMatchObject({
+    const status = output.status();
+
+    expect(status).toMatchObject({
       connected: false,
       driver: 'udmx',
-      lastError: 'uDMX adapter disconnected from 0x16c0:0x05dc.',
     });
+    expect(status.lastError).toContain(
+      'uDMX adapter disconnected from 0x16c0:0x05dc.',
+    );
+    expect(status.lastError).toContain('Runtime:');
     expect(device.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports visible USB devices when the configured uDMX adapter is missing', async () => {
+    const usbMock = {
+      findByIds: () => undefined,
+      getDeviceList: () => [
+        {
+          busNumber: 3,
+          deviceAddress: 8,
+          deviceDescriptor: {
+            idProduct: 0x05dc,
+            idVendor: 0x16c0,
+            iManufacturer: 1,
+            iProduct: 2,
+          },
+          portNumbers: [2],
+        },
+      ],
+    };
+
+    vi.doMock('usb', () => ({
+      ...usbMock,
+      default: usbMock,
+    }));
+
+    const { createDmxOutput } = await import('./dmxOutput.js');
+    const output = await createDmxOutput(testConfig({ dmxDriver: 'auto' }));
+    const status = output.status();
+
+    expect(status).toMatchObject({
+      driver: 'mock',
+      productId: '0x05dc',
+      vendorId: '0x16c0',
+    });
+    expect(status.detail).toContain('uDMX adapter not found at 0x16c0:0x05dc');
+    expect(status.detail).toContain('Visible USB devices: 0x16c0:0x05dc');
+    expect(status.usbDevices).toEqual([
+      '0x16c0:0x05dc (bus=3, address=8, ports=2, manufacturerIndex=1, productIndex=2)',
+    ]);
+    expect(status.runtime).toContain('platform=');
   });
 });
 

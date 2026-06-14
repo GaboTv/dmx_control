@@ -232,6 +232,35 @@ h2 {
   color: #9c8d86;
 }
 
+.deviceUsbDebug {
+  display: grid;
+  gap: 6px;
+}
+
+.deviceUsbDebug summary {
+  color: #ffe1b8;
+  cursor: pointer;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.deviceUsbDebug pre {
+  max-height: 140px;
+  overflow: auto;
+  margin: 0;
+  padding: 8px;
+  border-radius: 10px;
+  color: #d8fff0;
+  background: rgba(0, 0, 0, 0.34);
+  font:
+    0.68rem/1.35 Consolas,
+    'Cascadia Code',
+    monospace;
+  white-space: pre-wrap;
+}
+
 .deviceTitle {
   color: #fff !important;
   font-weight: 800;
