@@ -79,6 +79,14 @@ interface RetonoSlot {
   scene?: TrackScene;
 }
 
+interface RetonoPlaybackView {
+  currentTime: number;
+  duration: number;
+  sceneName: string;
+  slotIndex: number;
+  status: 'complete' | 'playing' | 'ready' | 'stopped';
+}
+
 interface GeneratedSceneResult {
   scene: TrackScene;
   warning?: string;
@@ -357,6 +365,7 @@ export function App() {
   const [processingProgress, setProcessingProgress] = useState<number>();
   const [retonoSlots, setRetonoSlots] =
     useState<RetonoSlot[]>(createRetonoSlots);
+  const [retonoPlayback, setRetonoPlayback] = useState<RetonoPlaybackView>();
   const [sceneGenerationMethod, setSceneGenerationMethod] =
     useState<SceneGenerationMethod>('section-phrases');
   const [scene, setScene] = useState<TrackScene>(() => createEmptyScene());
@@ -468,6 +477,29 @@ export function App() {
   const controlLock = snapshot.controlLock;
   const currentPlayerSlot = playerSlots[selectedPlayerSlot];
   const currentRetonoSlot = retonoSlots[selectedRetonoSlot];
+  const retonoViewerDuration =
+    retonoPlayback?.duration ?? currentRetonoSlot.scene?.duration ?? 0;
+  const retonoViewerTime = Math.min(
+    retonoViewerDuration,
+    retonoPlayback?.currentTime ?? 0,
+  );
+  const retonoViewerProgress = retonoViewerDuration
+    ? Math.min(
+        100,
+        Math.max(0, (retonoViewerTime / retonoViewerDuration) * 100),
+      )
+    : 0;
+  const retonoViewerStatus = retonoPlayback
+    ? retonoPlayback.status === 'playing'
+      ? `Playing row ${retonoPlayback.slotIndex + 1}`
+      : retonoPlayback.status === 'complete'
+        ? `Complete row ${retonoPlayback.slotIndex + 1}`
+        : retonoPlayback.status === 'stopped'
+          ? `Stopped row ${retonoPlayback.slotIndex + 1}`
+          : `Ready row ${retonoPlayback.slotIndex + 1}`
+    : currentRetonoSlot.scene
+      ? `Ready row ${selectedRetonoSlot + 1}`
+      : 'No Retono scene loaded';
   const cueDebugJson = currentCue ? JSON.stringify(currentCue, null, 2) : '';
   const ownsControlLock = controlLock?.clientId === clientId;
   const canSendHardwareCommands = !controlLock || ownsControlLock;
@@ -933,6 +965,13 @@ export function App() {
       setSong(undefined);
       setSongFile(undefined);
       setActiveCueId(undefined);
+      setRetonoPlayback({
+        currentTime: 0,
+        duration: imported.duration,
+        sceneName: imported.name,
+        slotIndex,
+        status: 'ready',
+      });
       nextCueIndexRef.current = 0;
       setSceneMessage(
         `Loaded ${imported.name} into Retono row ${slotIndex + 1}.`,
@@ -968,11 +1007,19 @@ export function App() {
     setSongFile(undefined);
     setActiveCueId(undefined);
     setIsPlaying(true);
+    setRetonoPlayback({
+      currentTime: 0,
+      duration: retonoScene.duration,
+      sceneName: retonoScene.name,
+      slotIndex,
+      status: 'playing',
+    });
     setSceneMessage(`Playing Retono row ${slotIndex + 1}.`);
 
     let nextCueIndex = findNextCueIndex(0, retonoScene.cues);
     let lastDimmingAt: number | undefined;
     let lastDimmingPatches: FixturePatches | undefined;
+    let lastViewerAt = -1;
     const startedAt = window.performance.now();
 
     const tick = () => {
@@ -980,6 +1027,17 @@ export function App() {
         retonoScene.duration,
         (window.performance.now() - startedAt) / 1000,
       );
+
+      if (time - lastViewerAt >= 0.1 || time >= retonoScene.duration) {
+        setRetonoPlayback({
+          currentTime: time,
+          duration: retonoScene.duration,
+          sceneName: retonoScene.name,
+          slotIndex,
+          status: time >= retonoScene.duration ? 'complete' : 'playing',
+        });
+        lastViewerAt = time;
+      }
 
       while (
         nextCueIndex < retonoScene.cues.length &&
@@ -1022,6 +1080,16 @@ export function App() {
     setSelectedRetonoSlot(slotIndex);
     stopSceneClock();
     setActiveCueId(undefined);
+    setRetonoPlayback((current) => {
+      const scene = retonoSlots[slotIndex]?.scene;
+      return {
+        currentTime: current?.slotIndex === slotIndex ? current.currentTime : 0,
+        duration: scene?.duration ?? current?.duration ?? 0,
+        sceneName: scene?.name ?? current?.sceneName ?? 'No JSON loaded',
+        slotIndex,
+        status: 'stopped',
+      };
+    });
     blackoutActiveLights();
     setSceneMessage(`Stopped Retono row ${slotIndex + 1}; blackout sent.`);
   }
@@ -2003,6 +2071,26 @@ export function App() {
                             : 'Manual JSON scene slot'}
                         </span>
                       </div>
+                      {active ? (
+                        <div className="retonoPlaybackMini" aria-live="polite">
+                          <span>{retonoViewerStatus}</span>
+                          <strong>
+                            {formatTime(retonoViewerTime)} /{' '}
+                            {formatTime(retonoViewerDuration)}
+                          </strong>
+                          <div
+                            className="retonoProgressTrack"
+                            aria-label="Retono playback progress"
+                          >
+                            <i style={{ width: `${retonoViewerProgress}%` }} />
+                          </div>
+                          <small>
+                            {retonoPlayback?.sceneName ??
+                              currentRetonoSlot.scene?.name ??
+                              'Load a JSON to arm a row.'}
+                          </small>
+                        </div>
+                      ) : null}
                       <label className="retonoFileButton">
                         Load JSON
                         <input
