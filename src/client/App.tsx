@@ -54,6 +54,7 @@ type StatusSocketPayload =
 const CLIENT_ID_STORAGE_KEY = 'dmx-control-client-id';
 const PLAYER_SLOT_COUNT = 20;
 const RETONO_SLOT_COUNT = 25;
+const SCENE_CLOCK_INTERVAL_MS = 16;
 const SCENE_DIMMING_INTERVAL_SECONDS = 0.05;
 const SCENE_DIMMING_KEYS: Array<keyof FixtureState> = [
   'master',
@@ -454,7 +455,7 @@ export function App() {
         window.clearTimeout(flushTimer.current);
       }
       if (sceneTimer.current) {
-        window.cancelAnimationFrame(sceneTimer.current);
+        window.clearTimeout(sceneTimer.current);
       }
       if (songUrlRef.current) {
         URL.revokeObjectURL(songUrlRef.current);
@@ -1070,20 +1071,30 @@ export function App() {
         return;
       }
 
-      sceneTimer.current = window.requestAnimationFrame(tick);
+      sceneTimer.current = window.setTimeout(tick, SCENE_CLOCK_INTERVAL_MS);
     };
 
-    sceneTimer.current = window.requestAnimationFrame(tick);
+    sceneTimer.current = window.setTimeout(tick, 0);
   }
 
   function stopRetonoPlayback(slotIndex: number) {
+    const sceneName =
+      retonoSlots[slotIndex]?.scene?.name ?? `row ${slotIndex + 1}`;
+    const confirmed = window.confirm(
+      `Stop ${sceneName} and immediately blackout the lights?`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
     setSelectedRetonoSlot(slotIndex);
     stopSceneClock();
     setActiveCueId(undefined);
     setRetonoPlayback((current) => {
       const scene = retonoSlots[slotIndex]?.scene;
       return {
-        currentTime: current?.slotIndex === slotIndex ? current.currentTime : 0,
+        currentTime: 0,
         duration: scene?.duration ?? current?.duration ?? 0,
         sceneName: scene?.name ?? current?.sceneName ?? 'No JSON loaded',
         slotIndex,
@@ -1262,15 +1273,15 @@ export function App() {
         lastSceneDimmingAt.current = audio.currentTime;
       }
 
-      sceneTimer.current = window.requestAnimationFrame(tick);
+      sceneTimer.current = window.setTimeout(tick, SCENE_CLOCK_INTERVAL_MS);
     };
 
-    sceneTimer.current = window.requestAnimationFrame(tick);
+    sceneTimer.current = window.setTimeout(tick, 0);
   }
 
   function stopSceneClock(updateState = true) {
     if (sceneTimer.current) {
-      window.cancelAnimationFrame(sceneTimer.current);
+      window.clearTimeout(sceneTimer.current);
       sceneTimer.current = undefined;
     }
     if (updateState) {

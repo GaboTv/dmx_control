@@ -1,6 +1,6 @@
 {
   "name": "dmx-light-control-app",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Desktop DMX light control app for uDMX-compatible fixtures.",
   "author": "Retono",
   "private": true,

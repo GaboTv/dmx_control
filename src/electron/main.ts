@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, shell } from 'electron';
+import { app, BrowserWindow, dialog, powerSaveBlocker, shell } from 'electron';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,12 @@ const DEFAULT_PORT = 4174;
 const SERVER_HOST = '127.0.0.1';
 
 let mainWindow: BrowserWindow | undefined;
+let powerSaveBlockerId: number | undefined;
 let serverProcess: ChildProcessWithoutNullStreams | undefined;
+
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
 
 function serverPort(): number {
   const rawPort = Number.parseInt(process.env.PORT ?? '', 10);
@@ -97,6 +102,7 @@ async function createMainWindow(): Promise<void> {
     show: false,
     title: 'DMX Light Control',
     webPreferences: {
+      backgroundThrottling: false,
       contextIsolation: true,
       nodeIntegration: false,
       preload: path.join(__dirname, 'preload.js'),
@@ -122,7 +128,27 @@ async function startApp(): Promise<void> {
     await waitForServer(serverUrl());
   }
 
+  startPowerSaveBlocker();
   await createMainWindow();
+}
+
+function startPowerSaveBlocker(): void {
+  if (powerSaveBlockerId !== undefined) {
+    return;
+  }
+
+  powerSaveBlockerId = powerSaveBlocker.start('prevent-app-suspension');
+}
+
+function stopPowerSaveBlocker(): void {
+  if (powerSaveBlockerId === undefined) {
+    return;
+  }
+
+  if (powerSaveBlocker.isStarted(powerSaveBlockerId)) {
+    powerSaveBlocker.stop(powerSaveBlockerId);
+  }
+  powerSaveBlockerId = undefined;
 }
 
 function stopServer(): void {
@@ -149,6 +175,7 @@ app.on('activate', () => {
 });
 
 app.on('before-quit', () => {
+  stopPowerSaveBlocker();
   stopServer();
 });
 
