@@ -46,13 +46,14 @@ import {
 import { TheaterViewer } from './TheaterViewer';
 
 type ConnectionState = 'connected' | 'connecting' | 'offline';
-type ActivePage = 'control' | 'home' | 'music' | 'player';
+type ActivePage = 'control' | 'home' | 'music' | 'player' | 'retono';
 type StatusSocketPayload =
   | { snapshot: DmxSnapshot; type: 'snapshot' }
   | { error: string; type: 'error' };
 
 const CLIENT_ID_STORAGE_KEY = 'dmx-control-client-id';
 const PLAYER_SLOT_COUNT = 20;
+const RETONO_SLOT_COUNT = 25;
 const SCENE_DIMMING_INTERVAL_SECONDS = 0.05;
 const SCENE_DIMMING_KEYS: Array<keyof FixtureState> = [
   'master',
@@ -72,6 +73,10 @@ interface PlayerSlot {
   scene?: TrackScene;
   song?: UploadedSong;
   songFile?: File;
+}
+
+interface RetonoSlot {
+  scene?: TrackScene;
 }
 
 interface GeneratedSceneResult {
@@ -312,6 +317,10 @@ function createPlayerSlots(): PlayerSlot[] {
   return Array.from({ length: PLAYER_SLOT_COUNT }, () => ({}));
 }
 
+function createRetonoSlots(): RetonoSlot[] {
+  return Array.from({ length: RETONO_SLOT_COUNT }, () => ({}));
+}
+
 function getOrCreateClientId(): string {
   try {
     const existing = window.localStorage.getItem(CLIENT_ID_STORAGE_KEY);
@@ -346,11 +355,14 @@ export function App() {
   const [playerSlots, setPlayerSlots] =
     useState<PlayerSlot[]>(createPlayerSlots);
   const [processingProgress, setProcessingProgress] = useState<number>();
+  const [retonoSlots, setRetonoSlots] =
+    useState<RetonoSlot[]>(createRetonoSlots);
   const [sceneGenerationMethod, setSceneGenerationMethod] =
     useState<SceneGenerationMethod>('section-phrases');
   const [scene, setScene] = useState<TrackScene>(() => createEmptyScene());
   const [sceneMessage, setSceneMessage] = useState<string>();
   const [selectedPlayerSlot, setSelectedPlayerSlot] = useState(0);
+  const [selectedRetonoSlot, setSelectedRetonoSlot] = useState(0);
   const [snapshot, setSnapshot] = useState<DmxSnapshot>(() => {
     const state = createInitialShowState();
     return {
@@ -455,6 +467,7 @@ export function App() {
   const currentCue = scene.cues.find((cue) => cue.id === activeCueId);
   const controlLock = snapshot.controlLock;
   const currentPlayerSlot = playerSlots[selectedPlayerSlot];
+  const currentRetonoSlot = retonoSlots[selectedRetonoSlot];
   const cueDebugJson = currentCue ? JSON.stringify(currentCue, null, 2) : '';
   const ownsControlLock = controlLock?.clientId === clientId;
   const canSendHardwareCommands = !controlLock || ownsControlLock;
@@ -899,6 +912,120 @@ export function App() {
     setSceneMessage(`Loaded player row ${slotIndex + 1}.`);
   }
 
+  async function handleRetonoSceneUpload(
+    slotIndex: number,
+    event: ChangeEvent<HTMLInputElement>,
+  ) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const imported = normalizeImportedScene(JSON.parse(await file.text()));
+      setRetonoSlots((current) =>
+        current.map((slot, index) =>
+          index === slotIndex ? { ...slot, scene: imported } : slot,
+        ),
+      );
+      setSelectedRetonoSlot(slotIndex);
+      setScene(imported);
+      setSong(undefined);
+      setSongFile(undefined);
+      setActiveCueId(undefined);
+      nextCueIndexRef.current = 0;
+      setSceneMessage(
+        `Loaded ${imported.name} into Retono row ${slotIndex + 1}.`,
+      );
+    } catch (importError) {
+      setSceneMessage(
+        importError instanceof Error
+          ? importError.message
+          : 'Could not import Retono scene JSON.',
+      );
+    } finally {
+      event.target.value = '';
+    }
+  }
+
+  async function playRetonoSlot(slotIndex: number) {
+    const slot = retonoSlots[slotIndex];
+    const retonoScene = slot.scene;
+    if (!retonoScene) {
+      setSceneMessage(`Load a JSON scene into Retono row ${slotIndex + 1}.`);
+      return;
+    }
+
+    if (!(await ensureControlLock())) {
+      return;
+    }
+
+    audioRef.current?.pause();
+    stopSceneClock(false);
+    setSelectedRetonoSlot(slotIndex);
+    setScene(retonoScene);
+    setSong(undefined);
+    setSongFile(undefined);
+    setActiveCueId(undefined);
+    setIsPlaying(true);
+    setSceneMessage(`Playing Retono row ${slotIndex + 1}.`);
+
+    let nextCueIndex = findNextCueIndex(0, retonoScene.cues);
+    let lastDimmingAt: number | undefined;
+    let lastDimmingPatches: FixturePatches | undefined;
+    const startedAt = window.performance.now();
+
+    const tick = () => {
+      const time = Math.min(
+        retonoScene.duration,
+        (window.performance.now() - startedAt) / 1000,
+      );
+
+      while (
+        nextCueIndex < retonoScene.cues.length &&
+        retonoScene.cues[nextCueIndex].time <= time + 0.045
+      ) {
+        setActiveCueId(retonoScene.cues[nextCueIndex].id);
+        nextCueIndex += 1;
+      }
+
+      if (
+        retonoScene.cues.length &&
+        (lastDimmingAt === undefined ||
+          time - lastDimmingAt >= SCENE_DIMMING_INTERVAL_SECONDS)
+      ) {
+        const dimmingPatches = sceneDimmingPatchesAt(
+          retonoScene.cues,
+          time,
+          retonoScene.fixtureCount,
+        );
+        if (shouldSendSceneDimming(dimmingPatches, lastDimmingPatches)) {
+          void queueFixturePatches(dimmingPatches, true);
+          lastDimmingPatches = dimmingPatches;
+        }
+        lastDimmingAt = time;
+      }
+
+      if (time >= retonoScene.duration) {
+        stopSceneClock();
+        setSceneMessage(`Retono row ${slotIndex + 1} complete.`);
+        return;
+      }
+
+      sceneTimer.current = window.requestAnimationFrame(tick);
+    };
+
+    sceneTimer.current = window.requestAnimationFrame(tick);
+  }
+
+  function stopRetonoPlayback(slotIndex: number) {
+    setSelectedRetonoSlot(slotIndex);
+    stopSceneClock();
+    setActiveCueId(undefined);
+    blackoutActiveLights();
+    setSceneMessage(`Stopped Retono row ${slotIndex + 1}; blackout sent.`);
+  }
+
   function exportScene() {
     const blob = new Blob([JSON.stringify(scene, null, 2)], {
       type: 'application/json',
@@ -1117,7 +1244,7 @@ export function App() {
 
   function returnHome() {
     if (isPlaying) {
-      setSceneMessage('Pause Music Sync before leaving this page.');
+      setSceneMessage('Stop playback before leaving this page.');
       return;
     }
 
@@ -1222,6 +1349,18 @@ export function App() {
                 and run playback beside the 3D stage.
               </small>
             </button>
+            <button
+              className="homeCard"
+              onClick={() => openPage('retono')}
+              type="button"
+            >
+              <span>Retono</span>
+              <strong>Retono</strong>
+              <small>
+                Manually load up to 25 scene JSON files, then play or stop each
+                row with blackout.
+              </small>
+            </button>
           </div>
         </section>
       ) : (
@@ -1241,17 +1380,21 @@ export function App() {
                   ? 'Manual control'
                   : activePage === 'music'
                     ? 'Music sync'
-                    : 'Show player'}
+                    : activePage === 'player'
+                      ? 'Show player'
+                      : 'Retono'}
               </p>
               <h2>
                 {activePage === 'control'
                   ? 'Control Light A/B'
                   : activePage === 'music'
                     ? 'Music Sync Page'
-                    : '20-Row Show Player'}
+                    : activePage === 'player'
+                      ? '20-Row Show Player'
+                      : 'Retono'}
               </h2>
               {isPlaying ? (
-                <small>Pause Music Sync before leaving this page.</small>
+                <small>Stop playback before leaving this page.</small>
               ) : null}
             </div>
           </section>
@@ -1275,7 +1418,9 @@ export function App() {
                   A009.
                 </small>
               </label>
-              {activePage === 'music' || activePage === 'player' ? (
+              {activePage === 'music' ||
+              activePage === 'player' ||
+              activePage === 'retono' ? (
                 <button
                   className="blackoutButton scopeBlackout"
                   disabled={!hardwareControlReady}
@@ -1656,7 +1801,7 @@ export function App() {
                 </div>
               </section>
             </>
-          ) : (
+          ) : activePage === 'player' ? (
             <>
               <section className="playerGrid">
                 <div className="panel playerDeckPanel">
@@ -1820,6 +1965,81 @@ export function App() {
                 </div>
               </section>
             </>
+          ) : (
+            <section className="panel retonoPanel">
+              <PanelHeader
+                kicker="Retono manual desk"
+                title="25 JSON Scene Rows"
+              />
+              <div className="retonoStatusCard">
+                <div>
+                  <span>Selected row {selectedRetonoSlot + 1}</span>
+                  <strong>
+                    {currentRetonoSlot.scene?.name ?? 'No JSON loaded'}
+                  </strong>
+                </div>
+                <small>
+                  Load one scene JSON per row. Play runs the JSON timeline
+                  without audio. Stop immediately sends blackout.
+                </small>
+              </div>
+              <div className="retonoRows" aria-label="Retono JSON scene rows">
+                {retonoSlots.map((slot, index) => {
+                  const active = index === selectedRetonoSlot;
+                  const sceneLoaded = Boolean(slot.scene);
+                  return (
+                    <div
+                      className={active ? 'retonoRow active' : 'retonoRow'}
+                      key={index}
+                    >
+                      <div className="retonoRowNumber">
+                        {String(index + 1).padStart(2, '0')}
+                      </div>
+                      <div className="retonoRowScene">
+                        <strong>{slot.scene?.name ?? 'No JSON loaded'}</strong>
+                        <span>
+                          {slot.scene
+                            ? `${slot.scene.cues.length} cues · ${formatTime(slot.scene.duration)}`
+                            : 'Manual JSON scene slot'}
+                        </span>
+                      </div>
+                      <label className="retonoFileButton">
+                        Load JSON
+                        <input
+                          accept="application/json,.json"
+                          disabled={isPlaying}
+                          onChange={(event) =>
+                            void handleRetonoSceneUpload(index, event)
+                          }
+                          type="file"
+                        />
+                      </label>
+                      <button
+                        className="primaryButton retonoPlayButton"
+                        disabled={
+                          !sceneLoaded || !hardwareControlReady || isPlaying
+                        }
+                        onClick={() => void playRetonoSlot(index)}
+                        type="button"
+                      >
+                        Play
+                      </button>
+                      <button
+                        className="blackoutButton retonoStopButton"
+                        disabled={!isPlaying || !active}
+                        onClick={() => stopRetonoPlayback(index)}
+                        type="button"
+                      >
+                        Stop
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+              {sceneMessage ? (
+                <p className="sceneMessage">{sceneMessage}</p>
+              ) : null}
+            </section>
           )}
         </>
       )}
@@ -1858,7 +2078,9 @@ function CommandBar({
         ? 'Manual Desk'
         : activePage === 'music'
           ? 'Music Sync'
-          : 'Show Player';
+          : activePage === 'player'
+            ? 'Show Player'
+            : 'Retono';
   const lockLabel = ownsLock ? 'Armed' : lock ? 'Read-only' : 'Standby';
   const updatedAt = new Date(snapshot.updatedAt).toLocaleTimeString([], {
     hour: '2-digit',

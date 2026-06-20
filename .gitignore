@@ -8,3 +8,4 @@ release/
 graphify-out/
 .graphifyignore
 skills-lock.json
+scene_creation/
